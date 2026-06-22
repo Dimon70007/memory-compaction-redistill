@@ -1,0 +1,12 @@
+{
+  "name": "memory-compaction-redistill",
+  "version": "0.1.0",
+  "description": "OpenClaw compaction provider with previous-summary redistill and memory-lancedb-pro sync",
+  "type": "module",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "id": "memory-compaction-redistill",
+  "name": "Memory Compaction Redistill",
+  "description": "Hypothesis-aware session compaction (previous summary + new history) and post-compaction sync to workspace memory + memory-lancedb-pro.",
+  "version": "0.1.0",
+  "kind": "utility",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "llm": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "provider/model for compaction summarization and fact extraction."
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key or ${ENV_VAR} placeholder."
+          },
+          "baseURL": {
+            "type": "string",
+            "description": "OpenAI-compatible base URL (default OpenRouter)."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 600000,
+            "default": 120000
+          }
+        }
+      },
+      "memoryLancedbProPath": {
+        "type": "string",
+        "description": "Absolute path to memory-lancedb-pro plugin directory for LanceDB store imports."
+      },
+      "syncToLancedb": {
+        "type": "boolean",
+        "default": true,
+        "description": "Persist extracted decisions to LanceDB via memory-lancedb-pro store."
+      },
+      "writeWorkspaceMemory": {
+        "type": "boolean",
+        "default": true,
+        "description": "Write memory/compaction-sync/*.md with summary and session transcript reference."
+      },
+      "memorySubdir": {
+        "type": "string",
+        "default": "memory/compaction-sync",
+        "description": "Relative path under agent workspace for compaction snapshots."
+      },
+      "maxSummaryChars": {
+        "type": "integer",
+        "minimum": 2000,
+        "maximum": 32000,
+        "default": 16000
+      }
+    }
+  },
+  "uiHints": {
+    "llm.model": {
+      "label": "Compaction LLM",
+      "help": "Exact provider/model for redistill summarization (e.g. openrouter/owl-alpha or litellm/gemma4-26b-a4b)."
+    },
+    "llm.apiKey": {
+      "label": "LLM API Key",
+      "sensitive": true,
+      "help": "OpenAI-compatible API key; supports ${OPENROUTER_API_KEY}."
+    },
+    "memoryLancedbProPath": {
+      "label": "memory-lancedb-pro Path",
+      "help": "Directory containing memory-lancedb-pro dist/ (same skills folder on <user_directory>)."
+    },
+    "syncToLancedb": {
+      "label": "Sync To LanceDB",
+      "help": "Store current decisions after each successful compaction."
+    }
+  }
+}
