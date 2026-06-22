@@ -8,7 +8,7 @@ OpenClaw companion plugin for **hypothesis-aware session compaction**:
 ## Install (<user_directory>)
 
 ```bash
-cp -a skills/memory-compaction-redistill ${HOME}/workspace/skills/
+cp -a skills/memory-compaction-redistill $HOME/workspace/skills/
 ```
 
 Ensure `openclaw.json` contains:
@@ -44,7 +44,7 @@ Restart gateway after copy.
 
 ```bash
 rg '"type":"compaction"' ~/.openclaw/agents/main/sessions/*.jsonl | tail -3
-ls -lt ${HOME}/workspace/memory/compaction-sync/
+ls -lt $HOME/workspace/memory/compaction-sync/
 journalctl -u openclaw-gateway --since "10 min ago" | rg memory-compaction-redistill
 ```
 
