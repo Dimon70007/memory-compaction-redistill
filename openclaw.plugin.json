@@ -6,11 +6,9 @@
   "kind": "utility",
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
       "llm": {
         "type": "object",
-        "additionalProperties": false,
         "properties": {
           "model": {
             "type": "string",
@@ -62,13 +60,14 @@
   "uiHints": {
     "llm.model": {
       "label": "Compaction LLM",
-      "help": "Exact provider/model for redistill summarization (e.g. openrouter/owl-alpha or litellm/gemma4-26b-a4b)."
+      "help": "Exact provider/model for redistill summarization (e.g. litellm/gemma4-26b-a4b or litellm/gemma4-26b-a4b)."
     },
     "llm.apiKey": {
       "label": "LLM API Key",
       "sensitive": true,
       "help": "OpenAI-compatible API key; supports ${OPENROUTER_API_KEY}."
     },
+
     "memoryLancedbProPath": {
       "label": "memory-lancedb-pro Path",
       "help": "Directory containing memory-lancedb-pro dist/ (same skills folder on <user_directory>)."

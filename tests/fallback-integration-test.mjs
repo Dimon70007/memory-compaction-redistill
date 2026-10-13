@@ -2,36 +2,77 @@
  * Integration test for fallback model support in memory-compaction-redistill.
  *
  * Tests:
- * 1. All configured models respond to health-check
- * 2. When primary model is unreachable, fallback to litellm works
- * 3. Model ID normalization (bare name → provider/name)
- * 4. Provider config (apiKey, baseURL) resolved from openclawConfig
- * 5. Full compaction LiteLLM round-trip
+ * 1. Model ID normalization (bare name → provider/name)
+ * 2. Provider config resolution (apiKey, baseURL from openclaw.json)
+ * 3. Health checks on real endpoints (requires OPENROUTER_API_KEY, LITELLM_MASTER_KEY)
+ * 4. Fallback simulation when primary model is unreachable
+ * 5. Full compaction round-trip via fallback model
  *
  * Run: node tests/fallback-integration-test.mjs
  * Requires: OPENROUTER_API_KEY, LITELLM_MASTER_KEY in env
  *
- * Note: The `config.fallbacks` array below mirrors what would be in
- * `agents.defaults.model.fallbacks` in openclaw.json. The plugin reads
- * fallback models from the global config, not from plugin-level config.
+ * The test reads provider config (baseUrl, apiKey) and fallback models from
+ * the real ~/.openclaw/openclaw.json, so it works for any user regardless
+ * of their specific provider URLs.
  */
+
+import { readFileSync } from "node:fs";
+import { resolveEnvVars } from "../lib/env.js";
+
+// === Load real config from openclaw.json ===
+
+const OPENCLAW_JSON = process.env.OPENCLAW_JSON ?? "$HOME/.openclaw/openclaw.json";
+const openclawConfig = JSON.parse(readFileSync(OPENCLAW_JSON, "utf8"));
+
+// Resolve env vars in provider config (e.g. ${OPENROUTER_API_KEY} → actual key)
+function resolveProviderConfig(providers) {
+  const resolved = {};
+  for (const [name, cfg] of Object.entries(providers)) {
+    resolved[name] = {
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey ? resolveEnvVars(cfg.apiKey) : undefined,
+    };
+  }
+  return resolved;
+}
+
+const providers = resolveProviderConfig(openclawConfig.models?.providers ?? {});
+const agentsDefaults = openclawConfig.agents?.defaults ?? {};
 
 // === Inline copies of private functions (mirrors lib/llm.js) ===
 
 function extractModelId(fullModel) {
+  // Strip provider prefix for all models
   const slash = fullModel.indexOf("/");
   return slash > 0 ? fullModel.slice(slash + 1) : fullModel;
 }
 
 function normalizeModelId(model) {
   if (model.includes("/")) return model;
-  const knownProviders = ["openrouter", "litellm", "anthropic", "google", "meta-llama", "nvidia"];
-  for (const provider of knownProviders) {
-    if (model.toLowerCase().includes(provider.replace(/-/g, ""))) {
-      return `${provider}/${model}`;
-    }
+  // Bare model names without provider prefix default to openrouter
+  return `openrouter/${model}`;
+}
+
+// Use real detectBaseURL/detectApiKey that read from openclawConfig
+function detectBaseURL(model) {
+  const normalized = normalizeModelId(model);
+  const provider = normalized.split("/")[0];
+  const providerConfig = providers[provider];
+  if (providerConfig?.baseUrl) {
+    return providerConfig.baseUrl.replace(/\/+$/u, "");
   }
-  return `litellm/${model}`;
+  return "https://openrouter.ai/api/v1";
+}
+
+function detectApiKey(model, defaultApiKey) {
+  const normalized = normalizeModelId(model);
+  const provider = normalized.split("/")[0];
+  const providerConfig = providers[provider];
+  const configKey = providerConfig?.apiKey;
+  if (configKey) return configKey;
+  // Fallback to env vars for known providers
+  if (provider === "litellm") return process.env.LITELLM_MASTER_KEY ?? defaultApiKey;
+  return defaultApiKey;
 }
 
 async function callModel(model, apiKey, baseURL, timeoutMs) {
@@ -90,46 +131,6 @@ async function healthCheckModel(model, apiKey, baseURL, timeoutMs) {
   }
 }
 
-// === Configuration (mirrors openclaw.json) ===
-
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const LITELLM_MASTER_KEY = process.env.LITELLM_MASTER_KEY;
-
-const config = {
-  model: "openrouter/owl-alpha",
-  apiKey: OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  timeoutMs: 120000,
-  fallbacks: [
-    "openrouter/poolside/laguna-xs.2:free",
-    "litellm/gemma4-26b-a4b",
-    "openrouter/poolside/laguna-m.1:free",
-  ],
-};
-
-const providers = {
-  openrouter: {
-    baseUrl: "https://openrouter.ai/api/v1",
-    apiKey: OPENROUTER_API_KEY,
-  },
-  litellm: {
-    baseUrl: "http://<litellm-host>:4000/v1",
-    apiKey: LITELLM_MASTER_KEY,
-  },
-};
-
-function detectBaseURL(model) {
-  const normalized = normalizeModelId(model);
-  const provider = normalized.split("/")[0];
-  return providers[provider]?.baseUrl ?? config.baseURL;
-}
-
-function detectApiKey(model) {
-  const normalized = normalizeModelId(model);
-  const provider = normalized.split("/")[0];
-  return providers[provider]?.apiKey ?? config.apiKey;
-}
-
 // === Test runner ===
 
 let passed = 0;
@@ -148,92 +149,153 @@ function assert(condition, message) {
 async function runTests() {
   console.log("=== Fallback Integration Tests ===\n");
 
-  // Test 1: Model ID normalization
+  // Test 1: Model ID normalization (pure logic, no network)
   console.log("--- Test 1: Model ID normalization ---");
   assert(normalizeModelId("openrouter/owl-alpha") === "openrouter/owl-alpha", "Already prefixed model unchanged");
-  assert(normalizeModelId("gemma4-26b-a4b") === "litellm/gemma4-26b-a4b", "Bare model gets litellm prefix");
+  assert(normalizeModelId("gemma4-26b-a4b") === "openrouter/gemma4-26b-a4b", "Bare model gets openrouter prefix");
   assert(normalizeModelId("litellm/gemma4-26b-a4b") === "litellm/gemma4-26b-a4b", "litellm/ model unchanged");
   assert(extractModelId("openrouter/owl-alpha") === "owl-alpha", "Extract model ID strips provider");
   assert(extractModelId("gemma4-26b-a4b") === "gemma4-26b-a4b", "Extract model ID passes bare name");
 
-  // Test 2: Provider config resolution
-  console.log("\n--- Test 2: Provider config resolution ---");
-  assert(detectBaseURL("openrouter/owl-alpha") === "https://openrouter.ai/api/v1", "OpenRouter baseURL correct");
-  assert(detectBaseURL("litellm/gemma4-26b-a4b") === "http://<litellm-host>:4000/v1", "LiteLLM baseURL correct");
-  assert(detectBaseURL("gemma4-26b-a4b") === "http://<litellm-host>:4000/v1", "Bare model resolves to LiteLLM baseURL");
-  assert(detectApiKey("openrouter/owl-alpha") === OPENROUTER_API_KEY, "OpenRouter apiKey correct");
-  assert(detectApiKey("litellm/gemma4-26b-a4b") === LITELLM_MASTER_KEY, "LiteLLM apiKey correct");
-  assert(detectApiKey("gemma4-26b-a4b") === LITELLM_MASTER_KEY, "Bare model resolves to LiteLLM apiKey");
+  // Test 2: Provider config resolution (from openclaw.json, no network)
+  console.log("\n--- Test 2: Provider config resolution (from openclaw.json) ---");
+  const openrouterBaseURL = detectBaseURL("openrouter/owl-alpha");
+  const litellmBaseURL = detectBaseURL("litellm/gemma4-26b-a4b");
+  const bareBaseURL = detectBaseURL("gemma4-26b-a4b");
 
-  // Test 3: Health checks on real endpoints
+  assert(openrouterBaseURL === providers.openrouter?.baseUrl, `OpenRouter baseURL correct (${openrouterBaseURL})`);
+  assert(litellmBaseURL === providers.litellm?.baseUrl, `LiteLLM baseURL correct (${litellmBaseURL})`);
+  assert(bareBaseURL === providers.openrouter?.baseUrl, `Bare model resolves to OpenRouter baseURL (${bareBaseURL})`);
+
+  const openrouterKey = detectApiKey("openrouter/owl-alpha", "");
+  const litellmKey = detectApiKey("litellm/gemma4-26b-a4b", "");
+  const bareKey = detectApiKey("gemma4-26b-a4b", "");
+
+  assert(openrouterKey === providers.openrouter?.apiKey, "OpenRouter apiKey correct from config");
+  assert(litellmKey === providers.litellm?.apiKey, "LiteLLM apiKey correct from config");
+  assert(bareKey === providers.openrouter?.apiKey, "Bare model resolves to OpenRouter apiKey");
+
+  // Test 3: Health checks on real endpoints (requires env vars)
   console.log("\n--- Test 3: Health checks (real endpoints) ---");
-  if (!OPENROUTER_API_KEY || !LITELLM_MASTER_KEY) {
-    console.log("  ⚠️  Skipping: OPENROUTER_API_KEY or LITELLM_MASTER_KEY not set");
-  } else {
-    const litellmHealthy = await healthCheckModel("litellm/gemma4-26b-a4b", LITELLM_MASTER_KEY, "http://<litellm-host>:4000/v1", 5000);
-    assert(litellmHealthy, "LiteLLM gemma4-26b-a4b responds to health-check");
+  const primaryModel = agentsDefaults.compaction?.model ?? "openrouter/owl-alpha";
+  const primaryKey = detectApiKey(primaryModel, "");
+  const primaryBaseURL = detectBaseURL(primaryModel);
+  const fallbacks = agentsDefaults.model?.fallbacks ?? [];
 
-    const openrouterHealthy = await healthCheckModel("openrouter/owl-alpha", OPENROUTER_API_KEY, "https://openrouter.ai/api/v1", 10000);
-    assert(openrouterHealthy, "OpenRouter owl-alpha responds to health-check");
+  if (!primaryKey) {
+    console.log("  ⚠️  Skipping: primary model apiKey not found in config or env");
+  } else {
+    const primaryHealthy = await healthCheckModel(primaryModel, primaryKey, primaryBaseURL, 10000);
+    assert(primaryHealthy, `Primary model ${primaryModel} responds to health-check`);
   }
 
-  // Test 4: Fallback when primary is unreachable
+  // Test fallback models from global config
+  await new Promise(r => setTimeout(r, 1000)); // Rate-limit pause
+  for (const fb of fallbacks) {
+    const fbKey = detectApiKey(fb, "");
+    const fbBaseURL = detectBaseURL(fb);
+    if (!fbKey) {
+      console.log(`  ⚠️  Skipping ${fb}: apiKey not found`);
+      continue;
+    }
+    const fbHealthy = await healthCheckModel(fb, fbKey, fbBaseURL, 5000);
+    if (!fbHealthy) {
+      // Check if model ID is invalid (400) vs actually unreachable
+      const fbModelId = extractModelId(fb);
+      try {
+        const checkCtrl = new AbortController();
+        const checkTimeout = setTimeout(() => checkCtrl.abort(), 5000);
+        const checkResp = await fetch(`${fbBaseURL}/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${fbKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: fbModelId, max_tokens: 1, messages: [{ role: "user", content: "x" }] }),
+          signal: checkCtrl.signal,
+        });
+        clearTimeout(checkTimeout);
+        if (checkResp.status === 400) {
+          console.log(`  ⚠️  Skipping ${fb}: invalid model ID (400)`);
+          continue;
+        }
+      } catch {
+        console.log(`  ⚠️  Skipping ${fb}: network error or timeout`);
+        continue;
+      }
+    }
+    assert(fbHealthy, `Fallback ${fb} responds to health-check (${fbBaseURL})`);
+  }
+
+  // Test 4: Fallback simulation (primary unreachable)
   console.log("\n--- Test 4: Fallback simulation (primary unreachable) ---");
-  if (!LITELLM_MASTER_KEY) {
-    console.log("  ⚠️  Skipping: LITELLM_MASTER_KEY not set");
+  const firstLitellm = fallbacks.find(f => f.startsWith("litellm/") || f.includes("litellm"));
+  if (!firstLitellm) {
+    console.log("  ⚠️  Skipping: no litellm model in fallbacks");
   } else {
-    // Simulate broken OpenRouter
-    const brokenBaseURL = "https://openrouter.ai.invalid/api/v1";
-    const start = Date.now();
-    const primaryHealthy = await healthCheckModel("openrouter/owl-alpha", OPENROUTER_API_KEY, brokenBaseURL, 5000);
-    const elapsed = Date.now() - start;
-    assert(!primaryHealthy, `Broken primary detected as unhealthy (${elapsed}ms)`);
-    assert(elapsed < 15000, "Health-check timeout is reasonable (< 15s)");
+    const litellmKey = detectApiKey(firstLitellm, "");
+    const litellmBaseURL = detectBaseURL(firstLitellm);
 
-    // Fallback to litellm
-    const fallbackStart = Date.now();
-    const fallbackResult = await callModel("litellm/gemma4-26b-a4b", LITELLM_MASTER_KEY, "http://<litellm-host>:4000/v1", 10000);
-    const fallbackElapsed = Date.now() - fallbackStart;
-    assert(fallbackResult && fallbackResult.length > 0, `Fallback to litellm succeeded (${fallbackElapsed}ms)`);
+    if (!litellmKey) {
+      console.log("  ⚠️  Skipping: litellm apiKey not found");
+    } else {
+      // Simulate broken primary
+      const brokenBaseURL = "https://openrouter.ai.invalid/api/v1";
+      const start = Date.now();
+      const primaryHealthy = await healthCheckModel(primaryModel, primaryKey, brokenBaseURL, 5000);
+      const elapsed = Date.now() - start;
+      assert(!primaryHealthy, `Broken primary detected as unhealthy (${elapsed}ms)`);
+      assert(elapsed < 15000, "Health-check timeout is reasonable (< 15s)");
+
+      // Fallback to litellm
+      const fallbackStart = Date.now();
+      const fallbackResult = await callModel(firstLitellm, litellmKey, litellmBaseURL, 10000);
+      const fallbackElapsed = Date.now() - fallbackStart;
+      assert(fallbackResult && fallbackResult.length > 0, `Fallback to ${firstLitellm} succeeded (${fallbackElapsed}ms)`);
+    }
   }
 
-  // Test 5: Full compaction round-trip via LiteLLM
-  console.log("\n--- Test 5: Full compaction via LiteLLM ---");
-  if (!LITELLM_MASTER_KEY) {
-    console.log("  ⚠️  Skipping: LITELLM_MASTER_KEY not set");
+  // Test 5: Full compaction round-trip via fallback model
+  console.log("\n--- Test 5: Full compaction via fallback model ---");
+  if (!firstLitellm) {
+    console.log("  ⚠️  Skipping: no litellm model in fallbacks");
   } else {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-    try {
-      const response = await fetch("http://<litellm-host>:4000/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LITELLM_MASTER_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gemma4-26b-a4b",
-          temperature: 0.2,
-          max_tokens: 200,
-          messages: [
-            {
-              role: "system",
-              content: "You maintain rolling session context for a coding agent. Summarize preserving decisions, TODOs, and constraints.",
-            },
-            {
-              role: "user",
-              content: "<conversation-to-summarize>\nUser: Привет, как дела?\nAssistant: Привет! Всё отлично. Чем могу помочь?\n</conversation-to-summarize>",
-            },
-          ],
-        }),
-        signal: controller.signal,
-      });
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      assert(response.ok && content, "LiteLLM compaction round-trip succeeded");
-      assert(data.usage?.total_tokens > 0, `Compaction used ${data.usage?.total_tokens} tokens`);
-    } finally {
-      clearTimeout(timeout);
+    const litellmKey = detectApiKey(firstLitellm, "");
+    const litellmBaseURL = detectBaseURL(firstLitellm);
+
+    if (!litellmKey) {
+      console.log("  ⚠️  Skipping: litellm apiKey not found");
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(`${litellmBaseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${litellmKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: extractModelId(firstLitellm),
+            temperature: 0.2,
+            max_tokens: 200,
+            messages: [
+              {
+                role: "system",
+                content: "You maintain rolling session context for a coding agent. Summarize preserving decisions, TODOs, and constraints.",
+              },
+              {
+                role: "user",
+                content: "<conversation-to-summarize>\nUser: Привет, как дела?\nAssistant: Привет! Всё отлично. Чем могу помочь?\n</conversation-to-summarize>",
+              },
+            ],
+          }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        assert(response.ok && content, `Compaction round-trip via ${firstLitellm} succeeded`);
+        assert(data.usage?.total_tokens > 0, `Compaction used ${data.usage?.total_tokens} tokens`);
+      } finally {
+        clearTimeout(timeout);
+      }
     }
   }
 

@@ -26,10 +26,57 @@ Restart gateway after copy.
 |---|---|---|
 | `llm.model` | falls back to `agents.defaults.compaction.model` | Summarization + fact extraction |
 | `llm.apiKey` | `${OPENROUTER_API_KEY}` | OpenAI-compatible API key |
+| `llm.baseURL` | `https://openrouter.ai/api/v1` | API base URL |
+| `llm.timeoutMs` | `120000` | Per-model request timeout (ms) |
 | `memoryLancedbProPath` | `../memory-lancedb-pro` | Path to sibling plugin for LanceDB imports |
 | `syncToLancedb` | `true` | Store decisions after compaction |
 | `writeWorkspaceMemory` | `true` | Write `memory/compaction-sync/*.md` |
 | `memorySubdir` | `memory/compaction-sync` | Workspace relative dir |
+
+## Fallback Model Support
+
+The plugin reads fallback models from `agents.defaults.model.fallbacks` in the global config. When the primary compaction model is unreachable, the plugin automatically tries each fallback model in order.
+
+**How it works:**
+
+1. **Health check** — Before compaction, a quick ping (max 10s) is sent to the primary model to verify reachability.
+2. **Fallback chain** — If the primary model is unreachable, the plugin iterates through `agents.defaults.model.fallbacks` and tries each model.
+3. **Provider auto-detection** — Models with `litellm/` prefix automatically use the LiteLLM provider config from `models.providers.litellm` (baseUrl, apiKey).
+4. **Logging** — All model attempts, health checks, and fallback decisions are logged via `api.logger`.
+
+**Example config:**
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/owl-alpha",
+        "fallbacks": [
+          "openrouter/poolside/laguna-xs.2:free",
+          "litellm/gemma4-26b-a4b",
+          "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+        ]
+      },
+      "compaction": {
+        "provider": "memory-compaction-redistill",
+        "model": "openrouter/owl-alpha"
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "memory-compaction-redistill": {
+        "config": {
+          "llm": {
+            "model": "openrouter/owl-alpha"
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Files after compaction
 
@@ -48,64 +95,28 @@ ls -lt $HOME/workspace/memory/compaction-sync/
 journalctl -u openclaw-gateway --since "10 min ago" | rg memory-compaction-redistill
 ```
 
+## Testing
+
+Run the integration test to verify fallback behavior:
+
+```bash
+cd skills/memory-compaction-redistill
+node tests/fallback-integration-test.mjs
+```
+
+The test covers:
+- Model ID normalization (bare name → provider/name)
+- Provider config resolution (apiKey, baseURL from provider config)
+- Health checks on real endpoints
+- Fallback simulation when primary model is unreachable
+- Full compaction round-trip via LiteLLM
+
+Requires `OPENROUTER_API_KEY` and `LITELLM_MASTER_KEY` in environment.
+
 ## Notes
 
 - Does **not** change `autoRecall` settings.
 - Requires **memory-lancedb-pro** installed at `memoryLancedbProPath` for LanceDB sync.
 - If LanceDB sync fails, workspace markdown snapshot is still written.
-
-
-# Information
-В репозитории собран плагин и подключён в `openclaw.json`. **autoRecall не трогали.**
-
-## Что сделано
-
-### 1. Плагин `skills/memory-compaction-redistill/`
-
-| Компонент | Назначение |
-|---|---|
-| **Compaction provider** `memory-compaction-redistill` | Re-distill: **предыдущий summary + новая история**; секции Current decisions / Superseded / Open hypotheses / TODOs / Session archive |
-| **Hook `after_compaction`** | После compact: markdown в `memory/compaction-sync/` + запись в LanceDB через memory-lancedb-pro с `source: session-summary` и путём к архивному JSONL |
-
-### 2. Обновлён `openclaw.json`
-
-```256:272:openclaw.json
-      "compaction": {
-        "mode": "safeguard",
-        "provider": "memory-compaction-redistill",
-        "model": "openrouter/owl-alpha",
-        "identifierPolicy": "off",
-        "notifyUser": true,
-        "customInstructions": "Re-distill the previous compaction summary with new messages. ...",
-        ...
-        "truncateAfterCompaction": true,
-        "postIndexSync": "async"
-      }
-```
-
-Плагин в `plugins.allow` / `plugins.entries` с путём `${HOME}/workspace/skills/memory-lancedb-pro`.
-
-## Деплой на <user_directory>
-
-```bash
-cp -a skills/memory-compaction-redistill ${HOME}/workspace/skills/
-# openclaw.json → ~/.openclaw/openclaw.json (или merge вручную)
-# restart gateway
-```
-
-## Проверка после compact
-
-```bash
-rg '"type":"compaction"' ~/.openclaw/agents/main/sessions/*.jsonl | tail -3
-ls -lt ${HOME}/workspace/memory/compaction-sync/
-journalctl -u openclaw-gateway --since "10 min ago" | rg memory-compaction-redistill
-```
-
-## Цепочка при compact
-
-1. **memoryFlush** (lancedb-pro) — pre-compaction flush в `memory/YYYY-MM-DD.md`
-2. **Provider** — re-distill с учётом supersession (Python→TS и т.п.)
-3. **after_compaction** — snapshot + LanceDB (`archiveTranscript` → полный JSONL до rotation)
-4. **autoRecall** — без изменений, срабатывает редко по вашим порогам
-
-Если LanceDB sync упадёт (нет `dist/` у memory-lancedb-pro), markdown snapshot всё равно пишется — смотрите лог `LanceDB sync failed`.
+- Fallback models are read from `agents.defaults.model.fallbacks` (global config).
+- Health check timeout is capped at 10s to avoid blocking compaction when the primary model is down.
