@@ -5,7 +5,7 @@ OpenClaw plugin that **compresses long chat sessions** without losing decisions:
 1. **Compact** — LLM builds a structured summary (Hybrid Variant B) from previous summary + new messages.
 2. **After compact** — writes a markdown snapshot under the workspace and (optionally) stores decisions in **memory-lancedb-pro** LanceDB.
 
-You do **not** need the `linux_to_mac` monorepo to install this plugin — only Git + OpenClaw.
+Install with the OpenClaw CLI ([plugins install docs](https://docs.openclaw.ai/cli/plugins/install)) — no manual `git clone` into `skills/` required.
 
 ---
 
@@ -13,29 +13,49 @@ You do **not** need the `linux_to_mac` monorepo to install this plugin — only 
 
 | Need | Why |
 |---|---|
-| OpenClaw gateway on the host | Plugin loads at gateway start |
-| Write access to agent workspace | Default: `$HOME/workspace` (or path from your `openclaw.json`) |
-| SSH access to this GitHub repo | `git clone git@github.com:Dimon70007/memory-compaction-redistill.git` |
+| OpenClaw CLI + gateway | `openclaw plugins install` and runtime load |
+| Access to this GitHub repo | Private install uses your GitHub credentials (SSH agent / `gh` / HTTPS token) |
 | LLM credentials in the **gateway process** env | See [Environment](#4-environment-variables) |
-| Optional: `memory-lancedb-pro` in the same `skills/` directory | Only if `syncToLancedb: true` |
+| Optional: `memory-lancedb-pro` installed | Only if `syncToLancedb: true` |
 
 ---
 
 ## Quick start (install + wire)
 
-### 1. Clone into skills
+### 1. Install via OpenClaw
+
+Pin a branch or commit (recommended for production):
 
 ```bash
-mkdir -p "$HOME/workspace/skills"
+# latest master
+openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@master
 
-git clone --depth 1 git@github.com:Dimon70007/memory-compaction-redistill.git \
-  "$HOME/workspace/skills/memory-compaction-redistill"
+# or pin an exact commit (reproducible)
+# openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@473272a
+
+# reinstall / replace existing install
+# openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@master --force
 ```
+
+OpenClaw clones the repo, validates `openclaw.plugin.json`, and records the install (including resolved commit) so later updates work.
 
 Update later:
 
 ```bash
-git -C "$HOME/workspace/skills/memory-compaction-redistill" pull --ff-only
+openclaw plugins update memory-compaction-redistill
+```
+
+Inspect:
+
+```bash
+openclaw plugins list
+openclaw plugins inspect memory-compaction-redistill --runtime --json
+```
+
+**Dev alternative** (local checkout / this monorepo submodule):
+
+```bash
+openclaw plugins install --link /path/to/memory-compaction-redistill
 ```
 
 ### 2. Backup and edit OpenClaw config
@@ -45,6 +65,12 @@ cp -a ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%Y%m%d%H%M
 ```
 
 Edit `~/.openclaw/openclaw.json` (merge the blocks below; keep your existing providers/agents).
+
+If install left the plugin **disabled** because config was missing, add `plugins.entries…config` first, then:
+
+```bash
+openclaw plugins enable memory-compaction-redistill
+```
 
 ### 3. Minimal config (copy-paste)
 
@@ -108,6 +134,8 @@ If you only use OpenRouter, you can omit `llm.fallback` / use another OpenRouter
 
 Also ensure the model id you pick exists under `models.providers.openrouter.models` (and LiteLLM, if used) **and** in `agents.defaults.modelPolicy.allow` if you use an allowlist.
 
+If LanceDB lives outside the default lookup path, set an absolute `memoryLancedbProPath` in this plugin’s `config`.
+
 ### 4. Environment variables
 
 Must be visible to the **OpenClaw gateway process** (systemd/user unit, launchd, or shell that starts the gateway) — not only in a random `.env` file:
@@ -129,9 +157,10 @@ openclaw gateway restart
 ### 6. Verify
 
 ```bash
-# plugin loaded
+openclaw plugins inspect memory-compaction-redistill --runtime --json
+
 journalctl --user -u openclaw-gateway -n 100 --no-pager | rg memory-compaction-redistill
-# expect lines like: compaction provider registered / context engine registered
+# expect: compaction provider registered / context engine registered
 
 # after a real compaction fires:
 ls -lt "$HOME/workspace/memory/compaction-sync/" | head
@@ -151,7 +180,7 @@ rg '"type":"compaction"' ~/.openclaw/agents/*/sessions/*.jsonl | tail -5
 3. Point `llm.baseURL` / `llm.apiKey` at that provider.
 4. Optional quality fallback: `llm.fallbacks` + `llm.fallback` (per-model credentials). When primary fails health-check, it is **skipped** and fallbacks run.
 
-**Recommended default in this project:** free primary `nvidia/nemotron-3-ultra-550b-a55b:free`, quality fallback local `litellm/qwen3.8-27b`.
+**Recommended default:** free primary `nvidia/nemotron-3-ultra-550b-a55b:free`, quality fallback local `litellm/qwen3.8-27b`.
 
 ### Staging (optional, recommended)
 
@@ -172,18 +201,16 @@ If fact extraction cannot produce structured decisions (bad summary shape / LLM 
 "syncToLancedb": false
 ```
 
-Markdown snapshots still write if `writeWorkspaceMemory: true`. Staging cleanup that waits on LanceDB will not delete chunks until sync succeeds — with sync off, leave staging disabled or accept chunks remaining on disk.
+Markdown snapshots still write if `writeWorkspaceMemory: true`. With sync off, prefer `staging.enabled: false` (cleanup is gated on LanceDB ack).
 
 ### Paths
 
-| Artifact | Default location |
+| Artifact | Typical location |
 |---|---|
-| Plugin code | `$HOME/workspace/skills/memory-compaction-redistill/` |
-| Markdown snapshots | `$HOME/workspace/memory/compaction-sync/` |
-| Staging chunks | `$HOME/workspace/memory/compaction-staging/<session>/` |
+| Plugin install (OpenClaw-managed) | under `~/.openclaw/` extensions / plugin install record (see `openclaw plugins inspect`) |
+| Markdown snapshots | `<workspace>/memory/compaction-sync/` |
+| Staging chunks | `<workspace>/memory/compaction-staging/<session>/` |
 | Session transcripts | `~/.openclaw/agents/<agent>/sessions/*.jsonl` |
-
-Override skill install dir only if your OpenClaw workspace/skills layout differs — then clone into **that** skills directory and set `memoryLancedbProPath` if LanceDB plugin is not a sibling folder.
 
 ---
 
@@ -204,21 +231,22 @@ gateway decides to compact
 
 | Symptom | Check |
 |---|---|
-| Plugin never mentioned in logs | Path under `…/skills/memory-compaction-redistill`, `plugins.allow`, `enabled: true`, restart |
+| Install fails / disabled | GitHub auth; `openclaw.plugin.json` present; add `config` then `openclaw plugins enable memory-compaction-redistill` |
+| Plugin never in logs | `plugins.allow`, `enabled: true`, `openclaw plugins list`, restart gateway |
 | Compact uses wrong model | Both `compaction.model` and `config.llm.model`; allowlist / provider catalog |
 | Auth / 401 | Env vars on **gateway** process; `${OPENROUTER_API_KEY}` placeholders resolve at runtime |
 | `staging.enabled` crash on start | Set positive `staging.chunkMaxChars` |
-| LanceDB errors | Install memory-lancedb-pro; set `memoryLancedbProPath`; or `syncToLancedb: false` |
-| Cross-chat “wrong summary” | Fixed in recent versions via session-scoped recovery — update plugin (`git pull`) |
+| LanceDB errors | Install/enable memory-lancedb-pro; set `memoryLancedbProPath`; or `syncToLancedb: false` |
+| Need newer code | `openclaw plugins update memory-compaction-redistill` (or reinstall with `@<commit> --force`) |
 
 ---
 
 ## Developer tests (optional)
 
-Offline unit tests (no API keys):
+From a local checkout / linked install:
 
 ```bash
-cd "$HOME/workspace/skills/memory-compaction-redistill"
+cd /path/to/memory-compaction-redistill
 npm test
 ```
 
