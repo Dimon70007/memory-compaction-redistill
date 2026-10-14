@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README rewritten for first-time operators: GitHub clone, copy-paste `openclaw.json`, env, verify, customize models/staging, troubleshooting.
 - Install docs: clone from `git@github.com:Dimon70007/memory-compaction-redistill.git` into `$HOME/workspace/skills/` (not local `cp -a`).
-- Removed `<code-review-notes>` from the published tree; neutralized host-specific path examples (`<user_directory>` → `<user_directory>` / `$HOME`).
+- Removed `<code-review-notes>` from the published tree; neutralized host-specific path examples (use `<user_directory>` / `$HOME`).
 
 ### Added
 
