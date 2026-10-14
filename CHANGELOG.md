@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- OpenClaw **2026.9.x** cold-start: manifest `kind` `utility` → `context-engine`; add `activation.onStartup` + `onConfigPaths` (`agents.defaults.compaction.provider`). Gateway only loads slot/activation owners — `plugins.load.paths` alone is not enough. Operators must set `plugins.slots.contextEngine=memory-compaction-redistill`.
+- `llm.fallback.baseURL` accepted (was only `baseUrl`); matches OpenClaw config camelCase.
 - README: install via `openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@<ref>` ([docs](https://docs.openclaw.ai/cli/plugins/install)); update with `openclaw plugins update`; `--link` for local dev.
 - README for first-time operators: copy-paste `openclaw.json`, env, verify, customize models/staging, troubleshooting.
 - Removed internal code-review notes from the published tree; neutralized host-specific path examples (use `<user_directory>` / `$HOME`).

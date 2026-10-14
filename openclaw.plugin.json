@@ -3,7 +3,13 @@
   "name": "Memory Compaction Redistill",
   "description": "Hypothesis-aware session compaction (previous summary + new history) and post-compaction sync to workspace memory + memory-lancedb-pro.",
   "version": "0.1.0",
-  "kind": "utility",
+  "kind": "context-engine",
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": [
+      "agents.defaults.compaction.provider"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "properties": {

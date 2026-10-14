@@ -48,11 +48,18 @@ npm install
 openclaw plugins install -l "$SKILLS/memory-compaction-redistill"
 ```
 
-Ensure config has a single load path covering all path-loaded plugins:
+Ensure config has a single load path covering all path-loaded plugins, and
+pin the OpenClaw **2026.9.x** startup slots (path-load alone is not enough —
+utility/context engines only boot when selected by a slot or
+`activation.onStartup`):
 
 ```json
 "plugins": {
-  "load": { "paths": ["<workspace>/skills"] }
+  "load": { "paths": ["<workspace>/skills"] },
+  "slots": {
+    "memory": "memory-lancedb-pro",
+    "contextEngine": "memory-compaction-redistill"
+  }
 }
 ```
 
@@ -119,6 +126,10 @@ Use your own model ids and OpenAI-compatible endpoints. Omit `llm.fallback` if y
       "memory-compaction-redistill",
       "memory-lancedb-pro"
     ],
+    "slots": {
+      "memory": "memory-lancedb-pro",
+      "contextEngine": "memory-compaction-redistill"
+    },
     "entries": {
       "memory-compaction-redistill": {
         "enabled": true,
