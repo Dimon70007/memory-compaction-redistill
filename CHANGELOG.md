@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Install docs: clone from `git@github.com:Dimon70007/memory-compaction-redistill.git` into `$HOME/workspace/skills/` (not local `cp -a`).
+
 ### Added
 
 - **Staging multi-pass (opt-in):** `staging.enabled` + required `staging.chunkMaxChars`. On fact-extract degrade → chunk residue under `memory/compaction-staging/<session>/` (no LanceDB). Next compact with non-empty queue: A chunks → B main → C merge; delete consumed chunks only after LanceDB ack. Empty queue = unchanged single compact.

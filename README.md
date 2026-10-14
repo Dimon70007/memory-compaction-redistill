@@ -5,20 +5,28 @@ OpenClaw companion plugin for **hypothesis-aware session compaction**:
 1. Registers compaction provider `memory-compaction-redistill` — merges **previous compaction summary + new chat history** (re-distill, supersession-aware).
 2. On `after_compaction` — writes `memory/compaction-sync/YYYY-MM-DD-<sessionId>.md` and stores current decisions in **memory-lancedb-pro** LanceDB with a pointer to the archived session JSONL.
 
-## Install (<user_directory>)
+## Install (OpenClaw host)
+
+From GitHub (recommended):
 
 ```bash
-cp -a skills/memory-compaction-redistill "$HOME/workspace/skills/"
+mkdir -p "$HOME/workspace/skills"
+git clone --depth 1 git@github.com:Dimon70007/memory-compaction-redistill.git \
+  "$HOME/workspace/skills/memory-compaction-redistill"
+# update later:
+# git -C "$HOME/workspace/skills/memory-compaction-redistill" pull --ff-only
 ```
 
-Ensure `openclaw.json` contains:
+Ensure `~/.openclaw/openclaw.json` contains:
 
 - `plugins.allow`: includes `memory-compaction-redistill`
 - `plugins.entries.memory-compaction-redistill.enabled`: `true`
 - `agents.defaults.compaction.provider`: `"memory-compaction-redistill"`
 - `agents.defaults.compaction.mode`: `"safeguard"` (forced when provider is set)
+- Compaction LLM (etalon): primary `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`, fallback `litellm/qwen3.8-27b`
+- Optional staging: `staging.enabled: true` + `staging.chunkMaxChars` (required when enabled)
 
-Restart gateway after copy.
+Restart gateway after install.
 
 ## Config (`plugins.entries.memory-compaction-redistill.config`)
 
