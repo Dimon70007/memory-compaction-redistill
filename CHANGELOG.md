@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README rewritten for first-time operators: GitHub clone, copy-paste `openclaw.json`, env, verify, customize models/staging, troubleshooting.
 - Install docs: clone from `git@github.com:Dimon70007/memory-compaction-redistill.git` into `$HOME/workspace/skills/` (not local `cp -a`).
 
 ### Added
