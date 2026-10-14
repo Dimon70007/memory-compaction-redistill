@@ -7,19 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **C1:** unreachable primary is skipped when fallbacks exist (no full `timeoutMs` wait on a dead primary).
-- **C2:** T047 `previousSummary` recovery is session-scoped (`Map` by `sessionKey`); filesystem scan uses `agentId` sessions dir and only filenames matching that session (fixes cross-chat contamination / wrong Telegram session id).
-- **C3:** context-engine `assemble` returns a real token estimate; `autoRecall` is an empty passthrough (no longer `estimatedTokens: 0`).
-- **C4:** LLM fact-extraction fallback uses `FACTS_SYSTEM` (strict JSON), not flush/`NO_REPLY` prompts.
-- **I1/I2:** health-check uses per-provider `detectApiKey`; explicit `llm.fallback` applies only to the matching model.
-- Paths in docs/examples/tests use `$HOME` instead of `$HOME`; few-shot session path is a generic placeholder.
-
 ### Added
 
+- **Staging multi-pass (opt-in):** `staging.enabled` + required `staging.chunkMaxChars`. On fact-extract degrade → chunk residue under `memory/compaction-staging/<session>/` (no LanceDB). Next compact with non-empty queue: A chunks → B main → C merge; delete consumed chunks only after LanceDB ack. Empty queue = unchanged single compact.
 - Offline unit suite `tests/critical-fixes.test.mjs` covering C1–C4 (+ I1/I2 credential helpers).
 - `lib/session-recovery.js` — session-scoped recovery store + `estimateMessagesTokens`.
+- `lib/staging.js`, `lib/multi-pass-compact.js` + tests for staging / multi-pass.
 - Fallback model chain for compaction LLM calls: reads `agents.defaults.model.fallbacks` (or plugin `llm.fallbacks`) and tries models in order when the primary fails.
 - Primary-model health check (capped at 10s) before compaction requests, with logging of attempts and fallback decisions.
 - Per-provider base URL / API key detection for `openrouter`, `litellm`, and other providers from `models.providers.*`.
@@ -31,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Markdown-first fact extraction from compaction summaries before LanceDB sync (no LLM when sections parse cleanly).
 - Integration test coverage for model normalization, provider resolution, health checks, fallback simulation, and LiteLLM round-trip (`tests/fallback-integration-test.mjs`).
 - README section documenting fallback behavior, config example, and how to run the integration test.
+
+### Fixed
+
+- **C1:** unreachable primary is skipped when fallbacks exist (no full `timeoutMs` wait on a dead primary).
+- **C2:** T047 `previousSummary` recovery is session-scoped (`Map` by `sessionKey`); filesystem scan uses `agentId` sessions dir and only filenames matching that session (fixes cross-chat contamination / wrong Telegram session id).
+- **C3:** context-engine `assemble` returns a real token estimate; `autoRecall` is an empty passthrough (no longer `estimatedTokens: 0`).
+- **C4:** LLM fact-extraction fallback uses `FACTS_SYSTEM` (strict JSON), not flush/`NO_REPLY` prompts.
+- **I1/I2:** health-check uses per-provider `detectApiKey`; explicit `llm.fallback` applies only to the matching model.
+- Paths in docs/examples/tests use `$HOME` instead of `$HOME`; few-shot session path is a generic placeholder.
+- Fact extract returns `degraded` instead of stuffing raw summary into LanceDB via `fallbackFacts`.
 
 ### Changed
 

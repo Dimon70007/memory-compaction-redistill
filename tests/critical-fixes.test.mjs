@@ -254,7 +254,7 @@ describe("C4: FACTS_SYSTEM on LLM fact fallback", () => {
       },
     };
     // Summary without markdown sections → triggers LLM fallback
-    const facts = await extractFactsFromSummary(
+    const result = await extractFactsFromSummary(
       llmConfig,
       "Plain prose without section headings about decision A.",
       "/tmp/a.jsonl",
@@ -262,7 +262,28 @@ describe("C4: FACTS_SYSTEM on LLM fact fallback", () => {
     assert.equal(calls.length, 1);
     assert.match(calls[0].system, /Return strict JSON only/i);
     assert.doesNotMatch(calls[0].system, /NO_REPLY/);
-    assert.deepEqual(facts.currentDecisions, ["keep A"]);
-    assert.deepEqual(facts.openTodos, ["todo"]);
+    assert.equal(result.mode, "structured");
+    assert.deepEqual(result.facts?.currentDecisions, ["keep A"]);
+    assert.deepEqual(result.facts?.openTodos, ["todo"]);
+  });
+
+  it("returns degraded when LLM is unavailable (no throw, no fake DB facts)", async () => {
+    const result = await extractFactsFromSummary(
+      {
+        model: "m",
+        apiKey: "k",
+        baseURL: "http://x",
+        timeoutMs: 5000,
+        fallbacks: [],
+        completeText: async () => {
+          throw new Error("All LLM models failed");
+        },
+      },
+      "Plain prose residue for staging.",
+      "/tmp/a.jsonl",
+    );
+    assert.equal(result.mode, "degraded");
+    assert.equal(result.residue, "Plain prose residue for staging.");
+    assert.equal(result.facts, undefined);
   });
 });

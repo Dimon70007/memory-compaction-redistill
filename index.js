@@ -17,6 +17,12 @@ import {
   createSessionRecoveryStore,
   estimateMessagesTokens,
 } from "./lib/session-recovery.js";
+import {
+  resolveStagingConfig,
+  writeResidueChunks,
+  readConsumedManifest,
+  deleteStagingChunks,
+} from "./lib/staging.js";
 
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -279,9 +285,10 @@ function asRecord(value) {
  *
  * @param {import("./lib/llm.js").LlmResolvedConfig} llmConfig
  * @param {(ctx?: { sessionKey?: string; agentId?: string; hintSessionFile?: string }) => Promise<string | null>} recoverPreviousSummary
+ * @param {import("./lib/staging.js").StagingConfig} stagingConfig
  */
-function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
-  const provider = createCompactionProvider(llmConfig, recoverPreviousSummary);
+function createRedistillContextEngine(llmConfig, recoverPreviousSummary, stagingConfig) {
+  const provider = createCompactionProvider(llmConfig, recoverPreviousSummary, stagingConfig);
 
   return {
     info: {
@@ -337,6 +344,7 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
           previousSummary: prevSummary,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
         });
 
         if (typeof result === "string" && result.trim()) {
@@ -415,13 +423,16 @@ export default function register(api) {
   const openclawConfig = api.config ?? {};
   const llmConfig = resolveLlmConfig(pluginConfig, openclawConfig);
   llmConfig.log = (msg) => api.logger.info(msg);
+  const stagingConfig = resolveStagingConfig(pluginConfig);
 
   // H2 fix: register compaction provider in real runtime modes ("full" and "discovery").
   // Setup/discovery modes ("setup-runtime", "setup-only", "cli-metadata", "tool-discovery") use noop registrars.
   // The main gateway process uses "discovery" mode (runtimeSideEffects: false), not "full".
   const isRealRuntimeMode = api.registrationMode === "full" || api.registrationMode === "discovery";
   if (isRealRuntimeMode) {
-    api.registerCompactionProvider(createCompactionProvider(llmConfig, recoverPreviousSummary));
+    api.registerCompactionProvider(
+      createCompactionProvider(llmConfig, recoverPreviousSummary, stagingConfig),
+    );
     registrationConfirmed = true;
     registrationTimestamp = Date.now();
     api.logger.info(
@@ -467,7 +478,9 @@ export default function register(api) {
         "memory-compaction-redistill: after_compaction fired while provider not registered — possible config reload race condition. Attempting emergency re-registration.",
       );
       try {
-        api.registerCompactionProvider(createCompactionProvider(llmConfig, recoverPreviousSummary));
+        api.registerCompactionProvider(
+          createCompactionProvider(llmConfig, recoverPreviousSummary, stagingConfig),
+        );
         registrationConfirmed = true;
         registrationTimestamp = Date.now();
         api.logger.info("memory-compaction-redistill: emergency re-registration successful");
@@ -488,7 +501,7 @@ export default function register(api) {
       asNonEmptyString(ctx.workspaceDir) ??
       join(process.env.HOME ?? "", ".openclaw", "workspace");
 
-    const facts = await extractFactsFromSummary(
+    const extractResult = await extractFactsFromSummary(
       llmConfig,
       compaction.summary,
       archiveTranscript,
@@ -497,6 +510,53 @@ export default function register(api) {
     const writeWorkspace = pluginConfig.writeWorkspaceMemory !== false;
     const memorySubdir =
       asNonEmptyString(pluginConfig.memorySubdir) ?? "memory/compaction-sync";
+
+    if (extractResult.mode === "degraded") {
+      api.logger.warn(
+        "memory-compaction-redistill: structured fact extract degraded — staging residue (no LanceDB write)",
+      );
+      if (stagingConfig.enabled && extractResult.residue) {
+        try {
+          const ids = await writeResidueChunks({
+            workspaceDir,
+            stagingDir: stagingConfig.dir,
+            sessionKey,
+            residue: extractResult.residue,
+            chunkMaxChars: stagingConfig.chunkMaxChars,
+          });
+          api.logger.info(
+            `memory-compaction-redistill: wrote ${ids.length} staging chunk(s) under ${stagingConfig.dir}`,
+          );
+        } catch (err) {
+          api.logger.warn(
+            `memory-compaction-redistill: staging write failed: ${String(err)}`,
+          );
+        }
+      } else if (!stagingConfig.enabled) {
+        api.logger.warn(
+          "memory-compaction-redistill: staging.enabled is false — residue not persisted for later multi-pass",
+        );
+      }
+      if (writeWorkspace) {
+        const relativePath = await writeWorkspaceCompactionSnapshot({
+          workspaceDir,
+          memorySubdir,
+          sessionId,
+          sessionKey,
+          summary: compaction.summary,
+          activeTranscript: sessionFile,
+        });
+        api.logger.info(
+          `memory-compaction-redistill: wrote workspace snapshot ${relativePath} (degraded, no facts)`,
+        );
+      }
+      return;
+    }
+
+    const facts = extractResult.facts;
+    if (!facts) {
+      return;
+    }
 
     if (writeWorkspace) {
       const relativePath = await writeWorkspaceCompactionSnapshot({
@@ -529,9 +589,28 @@ export default function register(api) {
         agentId,
         log: (message) => api.logger.info(message),
       });
+      // Delete staging only after confirmed LanceDB success
+      if (stagingConfig.enabled) {
+        const consumed = await readConsumedManifest({
+          workspaceDir,
+          stagingDir: stagingConfig.dir,
+          sessionKey,
+        });
+        if (consumed.length > 0) {
+          await deleteStagingChunks({
+            workspaceDir,
+            stagingDir: stagingConfig.dir,
+            sessionKey,
+            chunkIds: consumed,
+          });
+          api.logger.info(
+            `memory-compaction-redistill: deleted ${consumed.length} staging chunk(s) after LanceDB ack`,
+          );
+        }
+      }
     } catch (error) {
       api.logger.warn(
-        `memory-compaction-redistill: LanceDB sync failed (workspace snapshot still saved): ${String(error)}`,
+        `memory-compaction-redistill: LanceDB sync failed (workspace snapshot still saved; staging kept): ${String(error)}`,
       );
     }
   });
@@ -549,7 +628,9 @@ export default function register(api) {
   // compact() method directly instead of looking up provider from plugin registry
   if (isRealRuntimeMode) {
     try {
-      api.registerContextEngine("memory-compaction-redistill", () => createRedistillContextEngine(llmConfig, recoverPreviousSummary));
+      api.registerContextEngine("memory-compaction-redistill", () =>
+        createRedistillContextEngine(llmConfig, recoverPreviousSummary, stagingConfig),
+      );
       api.logger.info("memory-compaction-redistill: context engine registered with ownsCompaction=true");
     } catch (err) {
       api.logger.warn(`memory-compaction-redistill: context engine registration failed: ${String(err)}`);

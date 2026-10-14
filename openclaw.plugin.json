@@ -54,6 +54,27 @@
         "minimum": 2000,
         "maximum": 32000,
         "default": 16000
+      },
+      "staging": {
+        "type": "object",
+        "description": "Opt-in degrade recovery: chunk residue on disk; multi-pass only when queue non-empty.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, write staging chunks on fact-extract degrade and run multi-pass if queue non-empty."
+          },
+          "dir": {
+            "type": "string",
+            "default": "memory/compaction-staging",
+            "description": "Workspace-relative staging directory."
+          },
+          "chunkMaxChars": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Required when staging.enabled — max chars per chunk (fail closed if missing)."
+          }
+        }
       }
     }
   },

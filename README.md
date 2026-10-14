@@ -32,6 +32,11 @@ Restart gateway after copy.
 | `syncToLancedb` | `true` | Store decisions after compaction |
 | `writeWorkspaceMemory` | `true` | Write `memory/compaction-sync/*.md` |
 | `memorySubdir` | `memory/compaction-sync` | Workspace relative dir |
+| `staging.enabled` | `false` | Opt-in: persist residue on fact-extract degrade; multi-pass only if queue non-empty |
+| `staging.chunkMaxChars` | *(required if enabled)* | Max chars per staging chunk (fail closed if missing) |
+| `staging.dir` | `memory/compaction-staging` | Workspace-relative staging root |
+
+Staging does **not** change compact when the queue is empty. Chunks are deleted only after a successful LanceDB sync.
 
 ## Fallback Model Support
 
