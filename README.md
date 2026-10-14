@@ -5,7 +5,13 @@ OpenClaw plugin that **compresses long chat sessions** without losing decisions:
 1. **Compact** — LLM builds a structured summary (Hybrid Variant B) from previous summary + new messages.
 2. **After compact** — writes a markdown snapshot under the workspace and (optionally) stores decisions in **memory-lancedb-pro** LanceDB.
 
-Install with the OpenClaw CLI ([plugins install docs](https://docs.openclaw.ai/cli/plugins/install)) — no manual `git clone` into `skills/` required.
+**Preferred install for this project:** clone into the agent workspace `skills/`
+directory and load via `plugins.load.paths` (sibling layout with
+`memory-lancedb-pro`). Managed `openclaw plugins install git:…` works but lands
+under `~/.openclaw/git/…` and breaks the default relative
+`memoryLancedbProPath` (`../memory-lancedb-pro`).
+
+Docs use placeholders only — no host account paths, LAN IPs, or secret values.
 
 ---
 
@@ -13,37 +19,46 @@ Install with the OpenClaw CLI ([plugins install docs](https://docs.openclaw.ai/c
 
 | Need | Why |
 |---|---|
-| OpenClaw CLI + gateway | `openclaw plugins install` and runtime load |
-| Access to this GitHub repo | Private install uses your GitHub credentials (SSH agent / `gh` / HTTPS token) |
+| OpenClaw CLI + gateway | runtime load + restart |
+| Access to this GitHub repo | `git clone` (SSH agent / HTTPS credentials) |
 | LLM credentials in the **gateway process** env | See [Environment](#4-environment-variables) |
-| Optional: `memory-lancedb-pro` installed | Only if `syncToLancedb: true` |
+| Optional: `memory-lancedb-pro` under the same `skills/` | Only if `syncToLancedb: true` |
 
 ---
 
 ## Quick start (install + wire)
 
-### 1. Install via OpenClaw
-
-Pin a branch or commit (recommended for production):
+### 1. Install into workspace `skills/` (path-load)
 
 ```bash
-# latest master
-openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@master
+WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/workspace}"
+SKILLS="$WORKSPACE/skills"
+mkdir -p "$SKILLS"
 
-# or pin an exact commit (reproducible)
-# openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@473272a
+openclaw plugins uninstall memory-compaction-redistill 2>/dev/null || true
 
-# reinstall / replace existing install
-# openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@master --force
+git clone --branch master --single-branch \
+  git@github.com:Dimon70007/memory-compaction-redistill.git \
+  "$SKILLS/memory-compaction-redistill"
+
+cd "$SKILLS/memory-compaction-redistill"
+npm install
+
+# optional: record path install without copying into managed roots
+openclaw plugins install -l "$SKILLS/memory-compaction-redistill"
 ```
 
-OpenClaw clones the repo, validates `openclaw.plugin.json`, and records the install (including resolved commit) so later updates work.
+Ensure config has a single load path covering all path-loaded plugins:
 
-Update later:
-
-```bash
-openclaw plugins update memory-compaction-redistill
+```json
+"plugins": {
+  "load": { "paths": ["<workspace>/skills"] }
+}
 ```
+
+With both plugins under the same `skills/`, leave `memoryLancedbProPath` unset
+(default `../memory-lancedb-pro`) or set it explicitly to
+`"<workspace>/skills/memory-lancedb-pro"`.
 
 Inspect:
 
@@ -52,10 +67,17 @@ openclaw plugins list
 openclaw plugins inspect memory-compaction-redistill --runtime --json
 ```
 
-**Dev alternative** (local checkout / this monorepo submodule):
+**Managed alternative** (OpenClaw default roots — not `skills/`):
 
 ```bash
-openclaw plugins install --link /path/to/memory-compaction-redistill
+openclaw plugins install git:github.com/Dimon70007/memory-compaction-redistill@master
+# then set absolute memoryLancedbProPath to the memory-lancedb-pro install root
+```
+
+**Dev link** from a monorepo submodule checkout:
+
+```bash
+openclaw plugins install -l /path/to/memory-compaction-redistill
 ```
 
 ### 2. Backup and edit OpenClaw config
@@ -74,8 +96,7 @@ openclaw plugins enable memory-compaction-redistill
 
 ### 3. Minimal config (copy-paste)
 
-Replace `YOUR_LITELLM_BASE_URL` if you use a local LiteLLM fallback (example: `http://<litellm-host>:4000/v1`).  
-If you only use OpenRouter, you can omit `llm.fallback` / use another OpenRouter free model instead.
+Use your own model ids and OpenAI-compatible endpoints. Omit `llm.fallback` if you have a single provider. Do **not** commit real API keys — only `${ENV_VAR}` placeholders whose names you choose.
 
 ```json
 {
@@ -84,7 +105,7 @@ If you only use OpenRouter, you can omit `llm.fallback` / use another OpenRouter
       "compaction": {
         "mode": "safeguard",
         "provider": "memory-compaction-redistill",
-        "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "model": "<provider>/<model-id>",
         "timeoutSeconds": 600,
         "memoryFlush": {
           "enabled": true,
@@ -111,16 +132,16 @@ If you only use OpenRouter, you can omit `llm.fallback` / use another OpenRouter
             "chunkMaxChars": 8000
           },
           "llm": {
-            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-            "baseURL": "https://openrouter.ai/api/v1",
-            "apiKey": "${OPENROUTER_API_KEY}",
+            "model": "<provider>/<model-id>",
+            "baseURL": "<openai-compatible-base-url>",
+            "apiKey": "${LLM_API_KEY}",
             "timeoutMs": 600000,
             "temperature": 0.2,
-            "fallbacks": ["litellm/qwen3.8-27b"],
+            "fallbacks": ["<provider>/<fallback-model-id>"],
             "fallback": {
-              "model": "litellm/qwen3.8-27b",
-              "baseURL": "YOUR_LITELLM_BASE_URL",
-              "apiKey": "${LITELLM_MASTER_KEY}",
+              "model": "<provider>/<fallback-model-id>",
+              "baseURL": "<fallback-openai-compatible-base-url>",
+              "apiKey": "${LLM_FALLBACK_API_KEY}",
               "timeoutMs": 600000,
               "temperature": 0.2
             }
@@ -132,18 +153,18 @@ If you only use OpenRouter, you can omit `llm.fallback` / use another OpenRouter
 }
 ```
 
-Also ensure the model id you pick exists under `models.providers.openrouter.models` (and LiteLLM, if used) **and** in `agents.defaults.modelPolicy.allow` if you use an allowlist.
+Also ensure chosen model ids exist in your OpenClaw model catalog / allowlist if you use one.
 
 If LanceDB lives outside the default lookup path, set an absolute `memoryLancedbProPath` in this plugin’s `config`.
 
 ### 4. Environment variables
 
-Must be visible to the **OpenClaw gateway process** (systemd/user unit, launchd, or shell that starts the gateway) — not only in a random `.env` file:
+Must be visible to the **OpenClaw gateway process** (systemd/user unit, launchd, or shell that starts the gateway) — not only in a random `.env` file. Name the variables yourself; examples below are placeholders only:
 
-| Variable | Used for |
+| Variable (example name) | Used for |
 |---|---|
-| `OPENROUTER_API_KEY` | Primary compaction model (OpenRouter) |
-| `LITELLM_MASTER_KEY` | Fallback local model (if configured) |
+| `LLM_API_KEY` | Primary compaction endpoint |
+| `LLM_FALLBACK_API_KEY` | Fallback endpoint (if configured) |
 
 ### 5. Restart gateway
 
@@ -180,7 +201,7 @@ rg '"type":"compaction"' ~/.openclaw/agents/*/sessions/*.jsonl | tail -5
 3. Point `llm.baseURL` / `llm.apiKey` at that provider.
 4. Optional quality fallback: `llm.fallbacks` + `llm.fallback` (per-model credentials). When primary fails health-check, it is **skipped** and fallbacks run.
 
-**Recommended default:** free primary `nvidia/nemotron-3-ultra-550b-a55b:free`, quality fallback local `litellm/qwen3.8-27b`.
+Pick a primary model you trust for long summarization, plus an optional fallback on a second endpoint.
 
 ### Staging (optional, recommended)
 
@@ -207,7 +228,9 @@ Markdown snapshots still write if `writeWorkspaceMemory: true`. With sync off, p
 
 | Artifact | Typical location |
 |---|---|
-| Plugin install (OpenClaw-managed) | under `~/.openclaw/` extensions / plugin install record (see `openclaw plugins inspect`) |
+| Plugin (path-load) | `<workspace>/skills/memory-compaction-redistill/` |
+| Sibling memory plugin | `<workspace>/skills/memory-lancedb-pro/` |
+| Plugin (managed git, if used) | under `~/.openclaw/git/…` (see `openclaw plugins inspect`) |
 | Markdown snapshots | `<workspace>/memory/compaction-sync/` |
 | Staging chunks | `<workspace>/memory/compaction-staging/<session>/` |
 | Session transcripts | `~/.openclaw/agents/<agent>/sessions/*.jsonl` |
@@ -234,10 +257,10 @@ gateway decides to compact
 | Install fails / disabled | GitHub auth; `openclaw.plugin.json` present; add `config` then `openclaw plugins enable memory-compaction-redistill` |
 | Plugin never in logs | `plugins.allow`, `enabled: true`, `openclaw plugins list`, restart gateway |
 | Compact uses wrong model | Both `compaction.model` and `config.llm.model`; allowlist / provider catalog |
-| Auth / 401 | Env vars on **gateway** process; `${OPENROUTER_API_KEY}` placeholders resolve at runtime |
+| Auth / 401 | Env vars on **gateway** process; `${LLM_API_KEY}` (or your chosen names) resolve at runtime |
 | `staging.enabled` crash on start | Set positive `staging.chunkMaxChars` |
 | LanceDB errors | Install/enable memory-lancedb-pro; set `memoryLancedbProPath`; or `syncToLancedb: false` |
-| Need newer code | `openclaw plugins update memory-compaction-redistill` (or reinstall with `@<commit> --force`) |
+| Need newer code | `cd <workspace>/skills/memory-compaction-redistill && git pull --ff-only && npm install` then restart gateway (or managed `plugins update` if that install mode was used) |
 
 ---
 
@@ -254,8 +277,8 @@ Live integration (needs keys + network):
 
 ```bash
 export OPENCLAW_JSON="$HOME/.openclaw/openclaw.json"
-export OPENROUTER_API_KEY=…
-export LITELLM_MASTER_KEY=…   # if testing LiteLLM path
+export LLM_API_KEY=…              # whatever names your config references
+export LLM_FALLBACK_API_KEY=…     # only if testing fallback
 node tests/fallback-integration-test.mjs
 ```
 
