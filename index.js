@@ -1,6 +1,5 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readdir, stat } from "node:fs/promises";
 import { createCompactionProvider } from "./lib/compaction-provider.js";
 import { resolveLlmConfig } from "./lib/llm.js";
 import {
@@ -14,8 +13,10 @@ import {
   resolveArchiveTranscriptPath,
 } from "./lib/session-transcript.js";
 import { asNonEmptyString } from "./lib/env.js";
-import { formatMessagesForPrompt } from "./lib/messages.js";
-import { completeText } from "./lib/llm.js";
+import {
+  createSessionRecoveryStore,
+  estimateMessagesTokens,
+} from "./lib/session-recovery.js";
 
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -28,70 +29,17 @@ let registrationConfirmed = false;
 let registrationTimestamp = 0;
 
 /**
- * T047: Last session file seen by after_compaction.
- * Used by the compaction provider to recover `previousSummary` when OpenClaw
- * does not provide it (which happens after transcript rotation: the new child
- * transcript file has no compaction entry, so prepareCompaction passes
- * `previousSummary = undefined` and the provider loses all carried-forward decisions).
+ * T047: session-scoped previousSummary recovery (C2).
+ * Avoids pulling another chat's newest compaction (e.g. wrong Telegram id).
  */
-let lastCompactedSessionFile = null;
+const sessionRecovery = createSessionRecoveryStore();
 
 /**
- * T047 fallback: find the most recent session file with a compaction entry
- * by scanning the sessions directory. Used after gateway restart when
- * in-memory `lastCompactedSessionFile` is lost.
+ * @param {{ sessionKey?: string; agentId?: string; hintSessionFile?: string }} [ctx]
+ * @returns {Promise<string | null>}
  */
-async function findLatestCompactedSessionFile() {
-  const sessionsDir = join(process.env.HOME ?? "", ".openclaw", "agents", "main", "sessions");
-  try {
-    const entries = await readdir(sessionsDir);
-    const jsonlFiles = entries
-      .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."))
-      .map((f) => join(sessionsDir, f));
-    const withMtime = await Promise.all(
-      jsonlFiles.map(async (f) => {
-        const s = await stat(f).catch(() => null);
-        return s ? { file: f, mtime: s.mtimeMs } : null;
-      }),
-    );
-    const valid = withMtime.filter(Boolean).sort((a, b) => b.mtime - a.mtime);
-    for (const { file } of valid) {
-      const record = await readLatestCompaction(file);
-      if (record?.summary) return file;
-    }
-  } catch {
-    // directory may not exist or be unreadable
-  }
-  return null;
-}
-
-/**
- * T047: Recover the previous compaction summary when OpenClaw did not pass one.
- * After transcript rotation the active (child) session file has no compaction
- * entry, so `params.previousSummary` is empty. We recover it from the last
- * compacted file (captured in after_compaction) and, if that file also lacks a
- * compaction entry, from its parent session file.
- * Falls back to scanning sessions directory if in-memory state was lost (e.g. after gateway restart).
- */
-async function recoverPreviousSummary() {
-  if (lastCompactedSessionFile) {
-    try {
-      let record = await readLatestCompaction(lastCompactedSessionFile);
-      if (!record?.summary) {
-        const parent = await readSessionHeaderParent(lastCompactedSessionFile);
-        if (parent) record = await readLatestCompaction(parent);
-      }
-      if (record?.summary) return record.summary;
-    } catch {
-      // fall through to filesystem scan
-    }
-  }
-  const fallbackFile = await findLatestCompactedSessionFile();
-  if (fallbackFile) {
-    const record = await readLatestCompaction(fallbackFile);
-    if (record?.summary) return record.summary;
-  }
-  return null;
+async function recoverPreviousSummary(ctx = {}) {
+  return sessionRecovery.recover(ctx);
 }
 
 /**
@@ -129,7 +77,7 @@ function extractIdentifiers(summary) {
     /memory-compaction-redistill|memory-lancedb-pro/g, // Plugin names
     /qwen\/qwen3\.6-35b-a3b|ling-3\.0-flash-fin/g, // Model names
     /USDRUBF|UVXY|AAPL|TSLA|NVDA/g, // Tickers
-    /\/home\/<user_directory>\/[^\s\)]+/g, // File paths
+    /(?:\$HOME|~|\/home\/[^/\s]+)\/[^\s\)]+/g, // File paths
     /memory\/[\d-]+\.md/g,
   ];
   for (const pattern of patterns) {
@@ -325,8 +273,12 @@ function asRecord(value) {
 // instead of looking up a provider from the plugin registry.
 
 /**
+ * Compaction entrypoint via ContextEngine (ownsCompaction=true).
+ * Provider registration remains for `agents.defaults.compaction.provider=…`
+ * lookups; assemble/autoRecall are safe passthroughs (C3).
+ *
  * @param {import("./lib/llm.js").LlmResolvedConfig} llmConfig
- * @param {() => Promise<string | null>} recoverPreviousSummary
+ * @param {(ctx?: { sessionKey?: string; agentId?: string; hintSessionFile?: string }) => Promise<string | null>} recoverPreviousSummary
  */
 function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
   const provider = createCompactionProvider(llmConfig, recoverPreviousSummary);
@@ -346,6 +298,9 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
      * @param {AbortSignal} [params.signal]
      * @param {string} [params.customInstructions]
      * @param {string} [params.previousSummary]
+     * @param {string} [params.sessionKey]
+     * @param {string} [params.agentId]
+     * @param {string} [params.sessionId]
      * @param {object} [params.summarizationInstructions]
      * @param {string} [params.summarizationInstructions.identifierPolicy]
      * @param {string} [params.summarizationInstructions.identifierInstructions]
@@ -354,11 +309,14 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
     async compact(params) {
       const { messages, signal, customInstructions, previousSummary, summarizationInstructions, latestUnresolvedUserRequest } = params;
 
-      // Recover previousSummary if missing (transcript rotation)
+      // Recover previousSummary if missing (transcript rotation) — session-scoped (C2)
       let prevSummary = previousSummary?.trim() ?? "";
       if (!prevSummary && typeof recoverPreviousSummary === "function") {
         try {
-          const recovered = await recoverPreviousSummary();
+          const recovered = await recoverPreviousSummary({
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+          });
           if (recovered?.trim()) {
             prevSummary = recovered.trim();
             llmConfig.log?.(`memory-compaction-redistill: context engine T047 recovered previousSummary from parent session (${prevSummary.length} chars)`);
@@ -376,7 +334,9 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
           signal,
           customInstructions: structuredInstructions,
           summarizationInstructions,
-          previousSummary: prevSummary
+          previousSummary: prevSummary,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
         });
 
         if (typeof result === "string" && result.trim()) {
@@ -399,12 +359,20 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary) {
       }
     },
 
-    // Required no-op methods for ContextEngine interface
-    async ingest() { return { ingested: false }; },
-    async assemble(params) { return { messages: params.messages, estimatedTokens: 0 }; },
+    // ContextEngine required methods — assemble must not under-report tokens (C3)
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble(params) {
+      const messages = Array.isArray(params?.messages) ? params.messages : [];
+      return { messages, estimatedTokens: estimateMessagesTokens(messages) };
+    },
+    async autoRecall() {
+      return { memories: [] };
+    },
     async afterTurn() {},
     async ingestBatch() {},
-    async maintain() {}
+    async maintain() {},
   };
 }
 
@@ -486,10 +454,12 @@ export default function register(api) {
       return;
     }
 
-    // T047: capture the session file so the provider can recover previousSummary
-    // on the NEXT compaction (after transcript rotation the child file has no
-    // compaction entry and OpenClaw passes previousSummary = undefined).
-    lastCompactedSessionFile = sessionFile;
+    const sessionKey = asNonEmptyString(ctx.sessionKey) ?? "unknown";
+    const sessionId = asNonEmptyString(ctx.sessionId) ?? "unknown";
+    const agentId = asNonEmptyString(ctx.agentId) ?? "main";
+
+    // T047: session-scoped capture for next compaction (C2)
+    sessionRecovery.remember(sessionKey, sessionFile);
 
     // T031: Detect fallback compaction (race condition indicator)
     if (!registrationConfirmed) {
@@ -514,9 +484,6 @@ export default function register(api) {
 
     const parentSession = await readSessionHeaderParent(sessionFile);
     const archiveTranscript = resolveArchiveTranscriptPath(sessionFile, parentSession);
-    const sessionKey = asNonEmptyString(ctx.sessionKey) ?? "unknown";
-    const sessionId = asNonEmptyString(ctx.sessionId) ?? "unknown";
-    const agentId = asNonEmptyString(ctx.agentId) ?? "main";
     const workspaceDir =
       asNonEmptyString(ctx.workspaceDir) ??
       join(process.env.HOME ?? "", ".openclaw", "workspace");

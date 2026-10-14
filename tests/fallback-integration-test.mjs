@@ -21,7 +21,9 @@ import { resolveEnvVars } from "../lib/env.js";
 
 // === Load real config from openclaw.json ===
 
-const OPENCLAW_JSON = process.env.OPENCLAW_JSON ?? "$HOME/.openclaw/openclaw.json";
+const OPENCLAW_JSON =
+  process.env.OPENCLAW_JSON ??
+  `${process.env.HOME ?? ""}/.openclaw/openclaw.json`;
 const openclawConfig = JSON.parse(readFileSync(OPENCLAW_JSON, "utf8"));
 
 // Resolve env vars in provider config (e.g. ${OPENROUTER_API_KEY} → actual key)

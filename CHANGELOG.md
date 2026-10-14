@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **C1:** unreachable primary is skipped when fallbacks exist (no full `timeoutMs` wait on a dead primary).
+- **C2:** T047 `previousSummary` recovery is session-scoped (`Map` by `sessionKey`); filesystem scan uses `agentId` sessions dir and only filenames matching that session (fixes cross-chat contamination / wrong Telegram session id).
+- **C3:** context-engine `assemble` returns a real token estimate; `autoRecall` is an empty passthrough (no longer `estimatedTokens: 0`).
+- **C4:** LLM fact-extraction fallback uses `FACTS_SYSTEM` (strict JSON), not flush/`NO_REPLY` prompts.
+- **I1/I2:** health-check uses per-provider `detectApiKey`; explicit `llm.fallback` applies only to the matching model.
+- Paths in docs/examples/tests use `$HOME` instead of `$HOME`; few-shot session path is a generic placeholder.
+
 ### Added
 
+- Offline unit suite `tests/critical-fixes.test.mjs` covering C1–C4 (+ I1/I2 credential helpers).
+- `lib/session-recovery.js` — session-scoped recovery store + `estimateMessagesTokens`.
 - Fallback model chain for compaction LLM calls: reads `agents.defaults.model.fallbacks` (or plugin `llm.fallbacks`) and tries models in order when the primary fails.
 - Primary-model health check (capped at 10s) before compaction requests, with logging of attempts and fallback decisions.
 - Per-provider base URL / API key detection for `openrouter`, `litellm`, and other providers from `models.providers.*`.
@@ -30,9 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes / known gaps (from code review)
 
-- Health-check failure currently still attempts the primary model with full timeout before fallbacks (intended skip not implemented).
-- T047 filesystem recovery hardcodes `agents/main` and is process-global (not session-scoped).
-- LLM fact-extraction fallback uses flush-style prompts that ask for markdown/`NO_REPLY` while the parser expects JSON.
+- Critical C1–C4 addressed above; remaining Important items (I3 live-test drift, I5 few-shot size, I7 schema, I8 silentDrops) still open.
 
 ## [0.1.0] - prior
 

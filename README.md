@@ -8,7 +8,7 @@ OpenClaw companion plugin for **hypothesis-aware session compaction**:
 ## Install (<user_directory>)
 
 ```bash
-cp -a skills/memory-compaction-redistill $HOME/workspace/skills/
+cp -a skills/memory-compaction-redistill "$HOME/workspace/skills/"
 ```
 
 Ensure `openclaw.json` contains:
@@ -39,8 +39,8 @@ The plugin reads fallback models from `agents.defaults.model.fallbacks` in the g
 
 **How it works:**
 
-1. **Health check** — Before compaction, a quick ping (max 10s) is sent to the primary model to verify reachability.
-2. **Fallback chain** — If the primary model is unreachable, the plugin iterates through `agents.defaults.model.fallbacks` and tries each model.
+1. **Health check** — Before compaction, a quick ping (max 10s) is sent to the primary model (per-provider credentials) to verify reachability.
+2. **Fallback chain** — If the primary is unreachable, it is **skipped** and the plugin tries `agents.defaults.model.fallbacks` in order (session-scoped previousSummary recovery avoids cross-chat contamination).
 3. **Provider auto-detection** — Models with `litellm/` prefix automatically use the LiteLLM provider config from `models.providers.litellm` (baseUrl, apiKey).
 4. **Logging** — All model attempts, health checks, and fallback decisions are logged via `api.logger`.
 
@@ -91,7 +91,7 @@ The plugin reads fallback models from `agents.defaults.model.fallbacks` in the g
 
 ```bash
 rg '"type":"compaction"' ~/.openclaw/agents/main/sessions/*.jsonl | tail -3
-ls -lt $HOME/workspace/memory/compaction-sync/
+ls -lt "$HOME/workspace/memory/compaction-sync/"
 journalctl -u openclaw-gateway --since "10 min ago" | rg memory-compaction-redistill
 ```
 
