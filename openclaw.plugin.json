@@ -91,7 +91,7 @@
 
     "memoryLancedbProPath": {
       "label": "memory-lancedb-pro Path",
-      "help": "Directory containing memory-lancedb-pro dist/ (same skills folder on <user_directory>)."
+      "help": "Directory containing memory-lancedb-pro dist/ (sibling under workspace skills)."
     },
     "syncToLancedb": {
       "label": "Sync To LanceDB",

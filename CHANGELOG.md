@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README rewritten for first-time operators: GitHub clone, copy-paste `openclaw.json`, env, verify, customize models/staging, troubleshooting.
 - Install docs: clone from `git@github.com:Dimon70007/memory-compaction-redistill.git` into `$HOME/workspace/skills/` (not local `cp -a`).
+- Removed `<code-review-notes>` from the published tree; neutralized host-specific path examples (`<user_directory>` → `<user_directory>` / `$HOME`).
 
 ### Added
 
@@ -37,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **C3:** context-engine `assemble` returns a real token estimate; `autoRecall` is an empty passthrough (no longer `estimatedTokens: 0`).
 - **C4:** LLM fact-extraction fallback uses `FACTS_SYSTEM` (strict JSON), not flush/`NO_REPLY` prompts.
 - **I1/I2:** health-check uses per-provider `detectApiKey`; explicit `llm.fallback` applies only to the matching model.
-- Paths in docs/examples/tests use `$HOME` instead of `$HOME`; few-shot session path is a generic placeholder.
+- Paths in docs/examples/tests use `$HOME` / `<user_directory>` placeholders instead of host-specific home paths; few-shot session path is generic.
 - Fact extract returns `degraded` instead of stuffing raw summary into LanceDB via `fallbackFacts`.
 
 ### Changed
