@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Primary pre-compact probe (fail-fast):** `probePrimaryModel` requires HTTP OK + non-empty content (`max_tokens: 16`); overload/empty/timeout → skip primary to fallbacks. Config: `llm.primaryProbeTimeoutMs` (default **12s**). `healthCheckModel` wraps the same probe. Edge tests: `tests/primary-probe.test.mjs` (HTTP overload, invalid JSON, abort timeout, empty choices, completeText skip/retry, resolveLlmConfig clamp).
 - **TASK-047 A.I4 — OpenClaw 2026.9.9 SQLite-era compact I/O:** primary load/apply via `SessionManager` (`openclaw/plugin-sdk/agent-sessions`) using typed `sessionTarget` / sessionKey / `sqlite:` markers. **No** sessionKey→`sessions/<id>.jsonl` as production path. JSONL apply/rotate only when host passes a real abs `.jsonl`. Opaque refs: `oc:sqlite:v1:…` (sqlite) / `oc:jsonl:v1:…` (legacy). Fail closed with `missing_session_target` / `session_manager_unavailable` when sqlite apply API unavailable. Declares `transcriptSemantics` fencing + `commitTurn`. `after_compaction` skips `sqlite:` markers too. Tests: fake SessionManager harness; demoted JSONL path helper to legacy-only.
 
 ### Added

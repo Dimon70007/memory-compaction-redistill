@@ -13,6 +13,8 @@ import {
   resolveAttemptCredentials,
   completeText,
   healthCheckModel,
+  probePrimaryModel,
+  looksLikeUpstreamOverload,
 } from "../lib/llm.js";
 import { extractFactsFromSummary } from "../lib/lancedb-sync.js";
 import { createSessionRecoveryStore, estimateMessagesTokens } from "../lib/session-recovery.js";
@@ -42,8 +44,8 @@ describe("C1: skip unreachable primary", () => {
     globalThis.fetch = async (url, init) => {
       const body = JSON.parse(String(init?.body ?? "{}"));
       calls.push({ url: String(url), model: body.model, max_tokens: body.max_tokens });
-      // health check: max_tokens === 1
-      if (body.max_tokens === 1) {
+      // primary probe: max_tokens === 16
+      if (body.max_tokens === 16) {
         return new Response("down", { status: 503 });
       }
       if (body.model === "fb1") {
@@ -73,10 +75,93 @@ describe("C1: skip unreachable primary", () => {
         { system: "s", user: "u" },
       );
       assert.equal(text, "fallback-ok");
-      const completionCalls = calls.filter((c) => c.max_tokens !== 1);
+      const completionCalls = calls.filter((c) => c.max_tokens !== 16);
       assert.equal(completionCalls.length, 1);
       assert.equal(completionCalls[0].model, "fb1");
       assert.ok(!completionCalls.some((c) => c.model === "primary"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("completeText skips primary on empty probe content (fail fast to fallback)", async () => {
+    const calls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      calls.push({ model: body.model, max_tokens: body.max_tokens });
+      if (body.max_tokens === 16) {
+        return Response.json({ choices: [{ message: { content: "" } }] });
+      }
+      return Response.json({ choices: [{ message: { content: "fallback-ok" } }] });
+    };
+    try {
+      const text = await completeText(
+        {
+          model: "openrouter/primary",
+          apiKey: "k",
+          baseURL: "http://or.example/v1",
+          timeoutMs: 30_000,
+          primaryProbeTimeoutMs: 5_000,
+          fallbacks: ["litellm/fb1"],
+          openclawConfig: {
+            models: {
+              providers: {
+                openrouter: { baseUrl: "http://or.example/v1", apiKey: "ork" },
+                litellm: { baseUrl: "http://ll.example/v1", apiKey: "lk" },
+              },
+            },
+          },
+        },
+        { system: "s", user: "u" },
+      );
+      assert.equal(text, "fallback-ok");
+      assert.equal(calls.filter((c) => c.max_tokens === 16).length, 1);
+      assert.ok(!calls.some((c) => c.max_tokens !== 16 && c.model === "primary"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("primary probe quality", () => {
+  it("looksLikeUpstreamOverload detects status and body cues", () => {
+    assert.equal(looksLikeUpstreamOverload(503, ""), true);
+    assert.equal(looksLikeUpstreamOverload(200, "Upstream error from Nvidia: Service temporarily overloaded"), true);
+    assert.equal(looksLikeUpstreamOverload(200, "all good"), false);
+  });
+
+  it("probePrimaryModel requires non-empty content", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({ choices: [{ message: { content: "pong" } }] });
+    try {
+      const ok = await probePrimaryModel(
+        "openrouter/x",
+        "k",
+        "http://or.example/v1",
+        5000,
+      );
+      assert.equal(ok.healthy, true);
+      assert.equal(ok.reason, "ok");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("probePrimaryModel fails closed on empty content", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({ choices: [{ message: { content: "   " } }] });
+    try {
+      const bad = await probePrimaryModel(
+        "openrouter/x",
+        "k",
+        "http://or.example/v1",
+        5000,
+      );
+      assert.equal(bad.healthy, false);
+      assert.equal(bad.reason, "empty_content");
     } finally {
       globalThis.fetch = originalFetch;
     }
