@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CompactResult successor `sessionTarget`:** on rotate, return typed `{ agentId, sessionId, sessionKey?, storePath }` (OpenClaw preferred adopt path) alongside legacy `sessionId`/`sessionFile`; `details.tokensSaved` = `tokensBefore − tokensAfter`. Spec locked in TASK-047 §C.2.1.
 - **TASK-047 / 047.A.I3 — offline OpenClaw mock harness (option C):** `tests/openclaw-mock/` host lifecycle (`compact` → `maintain` → `after_compaction`) + active-window projection (OpenClaw 2026.9.9-adapted; `ATTRIBUTION.md`). In-repo fixtures under `tests/fixtures/` (no `/home/clawbox` I/O). Expanded corners: corrupt JSONL fail-closed, header-only, second compact, tool-pair cut, sessionKey `after_compaction` skip, summarize throw, fail→success isolation, lifecycle shrink assert.
 - Module split: `lib/context-engine.js`, `lib/compact-pipeline.js`, `lib/after-compaction.js`, `lib/util.js`; `index.js` is register wiring + re-exports. Strict `loadTranscript(..., { strict: true })` on compact path.
 

@@ -44,7 +44,11 @@ export {
   shouldSkipAfterCompactionSessionFile,
   createAfterCompactionHandler,
 } from "./lib/after-compaction.js";
-export { runCompactPipeline, buildCompactionStructureInstructions } from "./lib/compact-pipeline.js";
+export {
+  runCompactPipeline,
+  buildCompactionStructureInstructions,
+  buildSuccessorSessionTarget,
+} from "./lib/compact-pipeline.js";
 
 /**
  * @param {import("openclaw/plugin-sdk").OpenClawPluginApi} api

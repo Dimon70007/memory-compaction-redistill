@@ -267,6 +267,8 @@ gateway overflow/timeout/queued compact (often without params.messages)
 
 Fail-closed: empty/abort/apply error → `compacted: false`, **no** transcript mutation.
 
+**CompactResult (OpenClaw contract):** success returns `tokensBefore` / `tokensAfter` / `firstKeptEntryId` / `summary`; shrink for UI = `tokensBefore − tokensAfter` (also `details.tokensSaved`). On successor rotate: typed `result.sessionTarget` (`agentId`, `sessionId`, `sessionKey?`, `storePath`) plus legacy `sessionId` / `sessionFile` for older adopt paths.
+
 `agents.defaults.compaction.memoryFlush` is an **OpenClaw core** pre-compact step (writes durable notes). It is separate from this plugin’s summarizer prompts.
 
 Recommend `agents.defaults.compaction.truncateAfterCompaction: true` for queued `/compact` host rotate when the host still honors it; overflow shrink relies on engine `appendCompaction` (+ engine rotate when the JSONL file remains oversized).

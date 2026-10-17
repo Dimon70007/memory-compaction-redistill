@@ -72,11 +72,21 @@ export async function runOwnsCompactionLifecycle(engine, params) {
   let activeSessionFile = sessionFile;
   let activeSessionId = params.sessionId;
   if (result?.ok && result?.compacted && result?.result) {
+    // Prefer typed sessionTarget (OpenClaw preferred); fall back to legacy sessionFile/sessionId.
     if (typeof result.result.sessionFile === "string" && result.result.sessionFile.trim()) {
       activeSessionFile = result.result.sessionFile.trim();
     }
     if (typeof result.result.sessionId === "string" && result.result.sessionId.trim()) {
       activeSessionId = result.result.sessionId.trim();
+    }
+    const target = result.result.sessionTarget;
+    if (target && typeof target === "object") {
+      if (typeof target.storePath === "string" && target.storePath.trim()) {
+        activeSessionFile = target.storePath.trim();
+      }
+      if (typeof target.sessionId === "string" && target.sessionId.trim()) {
+        activeSessionId = target.sessionId.trim();
+      }
     }
   }
 

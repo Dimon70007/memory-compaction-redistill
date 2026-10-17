@@ -175,6 +175,10 @@ describe("openclaw-mock ownsCompaction lifecycle", () => {
     });
     assert.equal(life.result.compacted, true);
     assert.ok(life.result.result?.sessionFile);
+    assert.ok(life.result.result?.sessionTarget);
+    assert.equal(life.result.result.sessionTarget.storePath, life.result.result.sessionFile);
+    assert.equal(life.result.result.sessionTarget.sessionId, life.result.result.sessionId);
+    assert.ok(typeof life.result.result.details?.tokensSaved === "number");
     assert.notEqual(life.activeSessionFile, sessionFile);
 
     const pred = parseTranscriptLines(await readFile(sessionFile, "utf8"));

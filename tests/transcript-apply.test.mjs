@@ -446,12 +446,43 @@ describe("createRedistillContextEngine compact apply", () => {
     assert.ok(result.result?.sessionFile);
     assert.ok(result.result?.sessionId);
     assert.notEqual(result.result.sessionFile, sessionFile);
+    // OpenClaw CompactResult: prefer typed sessionTarget for adoptCompactionTranscript
+    assert.ok(result.result?.sessionTarget);
+    assert.equal(result.result.sessionTarget.sessionId, result.result.sessionId);
+    assert.equal(result.result.sessionTarget.agentId, "main");
+    assert.equal(result.result.sessionTarget.sessionKey, "agent:main:test");
+    assert.equal(result.result.sessionTarget.storePath, result.result.sessionFile);
+    assert.equal(typeof result.result.tokensBefore, "number");
+    assert.equal(typeof result.result.tokensAfter, "number");
+    assert.equal(
+      result.result.details?.tokensSaved,
+      Math.max(0, result.result.tokensBefore - result.result.tokensAfter),
+    );
     const successorRaw = await readFile(result.result.sessionFile, "utf8");
     const successorEntries = parseTranscriptLines(successorRaw);
     assert.equal(successorEntries[0]?.type, "session");
     assert.equal(successorEntries[0]?.parentSession, sessionFile);
     assert.ok(successorEntries.some((e) => e.type === "compaction"));
     assert.ok(sizeBefore > 1024);
+  });
+
+  it("happy path CompactResult includes size fields without sessionTarget when not rotated", async () => {
+    const engine = makeEngine();
+    const result = await engine.compact({
+      sessionId,
+      sessionKey: "agent:main:dashboard:test",
+      agentId: "main",
+      sessionFile,
+      currentTokenCount: 5000,
+    });
+    assert.equal(result.compacted, true);
+    assert.equal(result.result.tokensBefore, 5000);
+    assert.ok(typeof result.result.tokensAfter === "number");
+    assert.ok(result.result.firstKeptEntryId);
+    assert.ok(result.result.summary);
+    assert.equal(result.result.details?.tokensSaved, 5000 - result.result.tokensAfter);
+    assert.equal(result.result.sessionTarget, undefined);
+    assert.equal(result.result.sessionFile, undefined);
   });
 });
 
