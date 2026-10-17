@@ -93,4 +93,43 @@ describe("session-path resolve", () => {
     assert.equal(resolved.sessionFile, "");
     assert.match(String(resolved.detail ?? ""), /sessionKey-shaped/);
   });
+
+  it("does NOT treat sessionTarget.storePath=sessions.json as transcript", async () => {
+    // Live bug 2026-10-17: host passed storePath → .../sessions/sessions.json
+    const indexPath = join(sessionsDir, "sessions.json");
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        sessionFile: sessionKey,
+        sessionKey,
+        agentId: "team-lead",
+        sessionTarget: { storePath: indexPath, sessionId, agentId: "team-lead" },
+      },
+      { homeDir: home },
+    );
+    assert.notEqual(resolved.sessionFile, indexPath);
+    assert.ok(resolved.sessionFile.endsWith(".jsonl"));
+    assert.equal(resolved.sessionFile, jsonlPath);
+  });
+
+  it("treats sessionTarget.storePath as sessions dir and looks up .jsonl", async () => {
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        sessionKey,
+        agentId: "team-lead",
+        sessionId,
+        sessionTarget: { storePath: sessionsDir, sessionId, agentId: "team-lead" },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, jsonlPath);
+    assert.ok(!resolved.sessionFile.endsWith("sessions.json"));
+  });
+
+  it("rejects non-jsonl paths as transcript candidates", async () => {
+    const { isTranscriptJsonlPath } = await import("../lib/session-path.js");
+    assert.equal(isTranscriptJsonlPath(jsonlPath), true);
+    assert.equal(isTranscriptJsonlPath(join(sessionsDir, "sessions.json")), false);
+    assert.equal(isTranscriptJsonlPath(sessionsDir), false);
+    assert.equal(isTranscriptJsonlPath("/tmp/foo.trajectory-path.json"), false);
+  });
 });

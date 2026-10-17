@@ -466,6 +466,45 @@ describe("createRedistillContextEngine compact apply", () => {
     assert.ok(sizeBefore > 1024);
   });
 
+  it("storePath=sessions.json must not be loaded as transcript (live corrupt_jsonl bug)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mcr-storepath-"));
+    try {
+      const agentId = "main";
+      const sessionKey = "agent:main:dashboard:test";
+      const sessionsDir = join(home, ".openclaw", "agents", agentId, "sessions");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sessionsDir, { recursive: true });
+      const sid = sessionId;
+      const dest = join(sessionsDir, `${sid}.jsonl`);
+      await writeFile(dest, await readFile(sessionFile, "utf8"), "utf8");
+      const indexPath = join(sessionsDir, "sessions.json");
+      // Pretty-printed index — line 1 is "{" which triggers corrupt_jsonl_line:1 if misread as JSONL
+      await writeFile(
+        indexPath,
+        `{\n  ${JSON.stringify(sessionKey)}: { "sessionId": ${JSON.stringify(sid)} }\n}\n`,
+        "utf8",
+      );
+
+      const engine = makeEngine({ homeDir: home, keepRecentTokens: 40 });
+      const result = await engine.compact({
+        sessionId: sid,
+        sessionKey,
+        agentId,
+        sessionFile: sessionKey,
+        sessionTarget: { storePath: indexPath, sessionId: sid, agentId },
+        currentTokenCount: 5000,
+      });
+      assert.equal(result.compacted, true, `reason=${result.reason}`);
+      assert.ok(!String(result.reason ?? "").includes("corrupt_jsonl"));
+      const after = parseTranscriptLines(await readFile(dest, "utf8"));
+      assert.ok(after.some((e) => e.type === "compaction"));
+      // Index must remain untouched
+      assert.ok((await readFile(indexPath, "utf8")).includes("sessionId"));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("sessionKey-shaped sessionFile resolves via sessions.json and applies", async () => {
     const home = await mkdtemp(join(tmpdir(), "mcr-skresolve-"));
     try {

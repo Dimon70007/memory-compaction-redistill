@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`missing_session_file_and_messages` when host passes sessionKey as `sessionFile`:** resolve filesystem transcript via `sessions.json` / `sessionId` / `sessionTarget.storePath` / `runtimeContext` paths (`lib/session-path.js`) before fail-closed.
+- **`corrupt_jsonl_line` on `sessions.json`:** `sessionTarget.storePath` is the sessions **store** (`…/sessions` or `…/sessions.json`), not a transcript — never load it as JSONL; use it only to locate `<sessionId>.jsonl` via the index.
+- **`missing_session_file_and_messages` when host passes sessionKey as `sessionFile`:** resolve filesystem transcript via `sessions.json` / `sessionId` / store hints (`lib/session-path.js`) before fail-closed.
 
 ### Added
 
