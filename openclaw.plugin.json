@@ -20,6 +20,10 @@
             "type": "string",
             "description": "provider/model for compaction summarization and fact extraction."
           },
+          "auth": {
+            "type": "string",
+            "description": "Auth mode hint for OpenClaw (e.g. api-key)."
+          },
           "apiKey": {
             "type": "string",
             "description": "API key or ${ENV_VAR} placeholder."
@@ -31,8 +35,52 @@
           "timeoutMs": {
             "type": "integer",
             "minimum": 5000,
-            "maximum": 600000,
-            "default": 120000
+            "maximum": 1800000,
+            "default": 120000,
+            "description": "Per-request LLM timeout for summarize/fact calls (max 30 min)."
+          },
+          "primaryProbeTimeoutMs": {
+            "type": "integer",
+            "minimum": 2000,
+            "maximum": 60000,
+            "default": 12000,
+            "description": "Fail-fast primary model probe before long compaction summarize."
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "default": 0.2,
+            "description": "Sampling temperature for compaction summaries (lower = more factual)."
+          },
+          "fallbacks": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered fallback provider/model ids when primary probe or call fails."
+          },
+          "fallback": {
+            "type": "object",
+            "description": "Secondary OpenAI-compatible endpoint credentials for a fallback model.",
+            "properties": {
+              "model": { "type": "string" },
+              "auth": { "type": "string" },
+              "apiKey": { "type": "string" },
+              "baseURL": { "type": "string" },
+              "baseUrl": {
+                "type": "string",
+                "description": "Alias for baseURL."
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 5000,
+                "maximum": 1800000
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2
+              }
+            }
           }
         }
       },
@@ -94,7 +142,14 @@
       "sensitive": true,
       "help": "OpenAI-compatible API key; supports ${OPENROUTER_API_KEY}."
     },
-
+    "llm.timeoutMs": {
+      "label": "LLM timeout (ms)",
+      "help": "Per-request timeout for compaction summarize (schema max 1800000)."
+    },
+    "llm.primaryProbeTimeoutMs": {
+      "label": "Primary probe timeout (ms)",
+      "help": "Short fail-fast probe before skipping a dead/overloaded primary to fallbacks."
+    },
     "memoryLancedbProPath": {
       "label": "memory-lancedb-pro Path",
       "help": "Directory containing memory-lancedb-pro dist/ (sibling under workspace skills)."

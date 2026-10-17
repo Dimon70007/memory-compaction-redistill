@@ -146,14 +146,15 @@ Use your own model ids and OpenAI-compatible endpoints. Omit `llm.fallback` if y
             "model": "<provider>/<model-id>",
             "baseURL": "<openai-compatible-base-url>",
             "apiKey": "${LLM_API_KEY}",
-            "timeoutMs": 600000,
+            "timeoutMs": 900000,
+            "primaryProbeTimeoutMs": 12000,
             "temperature": 0.2,
             "fallbacks": ["<provider>/<fallback-model-id>"],
             "fallback": {
               "model": "<provider>/<fallback-model-id>",
               "baseURL": "<fallback-openai-compatible-base-url>",
               "apiKey": "${LLM_FALLBACK_API_KEY}",
-              "timeoutMs": 600000,
+              "timeoutMs": 900000,
               "temperature": 0.2
             }
           }
