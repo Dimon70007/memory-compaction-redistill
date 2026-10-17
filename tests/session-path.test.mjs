@@ -147,8 +147,9 @@ describe("session-path resolve", () => {
     assert.equal(resolved.sessionFile, jsonlPath);
   });
 
-  it("storePath=sessions.json + dashboard UUID sessionId finds entry by key suffix", async () => {
-    // sessionKey ends with dashboard id; transcript file uses a different sessionId
+  it("storePath=sessions.json + sessionKey resolves via exact entry.sessionId (OpenClaw)", async () => {
+    // OpenClaw: key → sessions.json[key] → entry.sessionId → <sid>.jsonl
+    // Dashboard UUID is only in the key; jsonl basename is entry.sessionId.
     const dashboardId = "86a91739-3efb-4a8f-bafc-6d4e85bc3976";
     const dashKey = `agent:main:dashboard:${dashboardId}`;
     const realSid = sessionId;
@@ -170,7 +171,8 @@ describe("session-path resolve", () => {
     const resolved = await resolveFilesystemSessionFile(
       {
         agentId: "main",
-        // Host may pass dashboard id as sessionId (not the jsonl basename)
+        sessionKey: dashKey,
+        // Host may also pass dashboard id as sessionId; exact key lookup wins via entry
         sessionId: dashboardId,
         sessionTarget: {
           storePath: join(mainDir, "sessions.json"),
@@ -181,6 +183,7 @@ describe("session-path resolve", () => {
       { homeDir: home },
     );
     assert.equal(resolved.sessionFile, mainJsonl);
+    assert.equal(resolved.resolvedFrom, "sessions.json");
   });
 
   it("storePath only without sessionKey/sessionId fails with explicit detail", async () => {
