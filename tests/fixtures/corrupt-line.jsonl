@@ -1,0 +1,5 @@
+{"type":"session","version":2,"id":"synth-corrupt","timestamp":"2026-10-16T12:00:00.000Z","cwd":"/tmp/openclaw-mock"}
+{"type":"message","id":"msg-u-1","parentId":null,"timestamp":"2026-10-16T12:00:01.000Z","message":{"role":"user","content":"before corrupt","timestamp":1729080001000}}
+{"type":"message","id":"msg-a-1","parentId":"msg-u-1","timestamp":"2026-10-16T12:00:02.000Z","message":{"role":"assistant","content":"ok","timestamp":1729080002000}
+{"type":"message","id":"msg-u-2","parentId":"msg-a-1","timestamp":"2026-10-16T12:00:03.000Z","message":{"role":"user","content":"after corrupt","timestamp":1729080003000}}
+{"type":"message","id":"msg-a-2","parentId":"msg-u-2","timestamp":"2026-10-16T12:00:04.000Z","message":{"role":"assistant","content":"tail","timestamp":1729080004000}}

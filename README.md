@@ -299,6 +299,16 @@ cd /path/to/memory-compaction-redistill
 npm test
 ```
 
+Offline suite includes:
+
+| Suite | What it proves |
+|---|---|
+| `tests/transcript-apply.test.mjs` | append/rotate + engine apply / fail-closed |
+| `tests/corners.test.mjs` | corrupt JSONL, header-only, second compact, tool-pair, sessionKey hook skip, summarize throw |
+| `tests/openclaw-mock/lifecycle.test.mjs` | mock host lifecycle: window shrink on success, byte-identical on fail, rotate `parentSession` |
+
+Mock harness lives under `tests/openclaw-mock/` (see `ATTRIBUTION.md`). Fixtures are synthetic JSONL in `tests/fixtures/` — tests copy into `os.tmpdir()` only. **No** live gateway, litellm, OpenRouter, or `/home/clawbox` I/O.
+
 Live integration (needs keys + network):
 
 ```bash

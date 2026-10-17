@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "node --test tests/critical-fixes.test.mjs tests/staging.test.mjs tests/multi-pass-compact.test.mjs tests/transcript-apply.test.mjs"
+    "test": "node --test tests/critical-fixes.test.mjs tests/staging.test.mjs tests/multi-pass-compact.test.mjs tests/transcript-apply.test.mjs tests/corners.test.mjs tests/openclaw-mock/lifecycle.test.mjs"
   },
   "openclaw": {
     "extensions": [

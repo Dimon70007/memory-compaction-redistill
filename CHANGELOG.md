@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TASK-047 / 047.A.I3 — offline OpenClaw mock harness (option C):** `tests/openclaw-mock/` host lifecycle (`compact` → `maintain` → `after_compaction`) + active-window projection (OpenClaw 2026.9.9-adapted; `ATTRIBUTION.md`). In-repo fixtures under `tests/fixtures/` (no `/home/clawbox` I/O). Expanded corners: corrupt JSONL fail-closed, header-only, second compact, tool-pair cut, sessionKey `after_compaction` skip, summarize throw, fail→success isolation, lifecycle shrink assert.
+- Module split: `lib/context-engine.js`, `lib/compact-pipeline.js`, `lib/after-compaction.js`, `lib/util.js`; `index.js` is register wiring + re-exports. Strict `loadTranscript(..., { strict: true })` on compact path.
+
 ### Fixed
 
 - **TASK-047 Iteration A — context not shrinking:** `ContextEngine.compact` now **applies** after a successful non-empty LLM summarize: tool-safe `firstKeptEntryId`, opaque `oc:jsonl:v1:…` ref in summary, `appendCompaction` on live `sessionFile`. `compacted: true` only when apply succeeds. Overflow/timeout calls without `params.messages` load the transcript from `sessionFile`. Honors `abortSignal`. Fail-closed (empty/abort/apply error → no transcript mutation). When the JSONL file still exceeds `maxActiveTranscriptBytes`, engine rotates an OpenClaw-style successor (`parentSession`) and returns successor `sessionId`/`sessionFile` for host `adoptCompactionTranscript`.
