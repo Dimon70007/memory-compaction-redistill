@@ -466,6 +466,42 @@ describe("createRedistillContextEngine compact apply", () => {
     assert.ok(sizeBefore > 1024);
   });
 
+  it("sessionKey-shaped sessionFile resolves via sessions.json and applies", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mcr-skresolve-"));
+    try {
+      const agentId = "team-lead";
+      const sessionKey = "agent:team-lead:telegram:group:-1003808706444:topic:2";
+      const sessionsDir = join(home, ".openclaw", "agents", agentId, "sessions");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sessionsDir, { recursive: true });
+      // Move fixture into agent sessions dir
+      const sid = sessionId;
+      const dest = join(sessionsDir, `${sid}.jsonl`);
+      await writeFile(dest, await readFile(sessionFile, "utf8"), "utf8");
+      await writeFile(
+        join(sessionsDir, "sessions.json"),
+        JSON.stringify({ [sessionKey]: { sessionId: sid } }),
+        "utf8",
+      );
+
+      const engine = makeEngine({ homeDir: home, keepRecentTokens: 40 });
+      const result = await engine.compact({
+        sessionId: sid,
+        sessionKey,
+        agentId,
+        // Host bug/shape: sessionFile is the sessionKey
+        sessionFile: sessionKey,
+        currentTokenCount: 5000,
+      });
+      assert.equal(result.compacted, true);
+      assert.ok(result.result?.firstKeptEntryId);
+      const after = parseTranscriptLines(await readFile(dest, "utf8"));
+      assert.ok(after.some((e) => e.type === "compaction"));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("happy path CompactResult includes size fields without sessionTarget when not rotated", async () => {
     const engine = makeEngine();
     const result = await engine.compact({

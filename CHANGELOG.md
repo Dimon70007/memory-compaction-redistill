@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`missing_session_file_and_messages` when host passes sessionKey as `sessionFile`:** resolve filesystem transcript via `sessions.json` / `sessionId` / `sessionTarget.storePath` / `runtimeContext` paths (`lib/session-path.js`) before fail-closed.
+
 ### Added
 
 - **CompactResult successor `sessionTarget`:** on rotate, return typed `{ agentId, sessionId, sessionKey?, storePath }` (OpenClaw preferred adopt path) alongside legacy `sessionId`/`sessionFile`; `details.tokensSaved` = `tokensBefore − tokensAfter`. Spec locked in TASK-047 §C.2.1.
