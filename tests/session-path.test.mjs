@@ -132,4 +132,66 @@ describe("session-path resolve", () => {
     assert.equal(isTranscriptJsonlPath(sessionsDir), false);
     assert.equal(isTranscriptJsonlPath("/tmp/foo.trajectory-path.json"), false);
   });
+
+  it("storePath=sessions.json + sessionKey resolves without params.sessionFile", async () => {
+    // Live 2026-10-17: UI compact often sends storePath only + sessionKey/sessionId
+    const indexPath = join(sessionsDir, "sessions.json");
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        agentId: "team-lead",
+        sessionKey,
+        sessionTarget: { storePath: indexPath, agentId: "team-lead" },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, jsonlPath);
+  });
+
+  it("storePath=sessions.json + dashboard UUID sessionId finds entry by key suffix", async () => {
+    // sessionKey ends with dashboard id; transcript file uses a different sessionId
+    const dashboardId = "86a91739-3efb-4a8f-bafc-6d4e85bc3976";
+    const dashKey = `agent:main:dashboard:${dashboardId}`;
+    const realSid = sessionId;
+    const mainDir = join(home, ".openclaw", "agents", "main", "sessions");
+    await mkdir(mainDir, { recursive: true });
+    const mainJsonl = join(mainDir, `${realSid}.jsonl`);
+    await writeFile(
+      mainJsonl,
+      `${JSON.stringify({ type: "session", version: 2, id: realSid, timestamp: "2026-10-17T00:00:00.000Z", cwd: "/tmp" })}\n` +
+        `${JSON.stringify({ type: "message", id: randomUUID(), message: { role: "user", content: "hi" } })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(mainDir, "sessions.json"),
+      JSON.stringify({ [dashKey]: { sessionId: realSid, updatedAt: Date.now() } }),
+      "utf8",
+    );
+
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        agentId: "main",
+        // Host may pass dashboard id as sessionId (not the jsonl basename)
+        sessionId: dashboardId,
+        sessionTarget: {
+          storePath: join(mainDir, "sessions.json"),
+          sessionId: dashboardId,
+          agentId: "main",
+        },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, mainJsonl);
+  });
+
+  it("storePath only without sessionKey/sessionId fails with explicit detail", async () => {
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        agentId: "main",
+        sessionTarget: { storePath: join(sessionsDir, "sessions.json") },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, "");
+    assert.match(String(resolved.detail ?? ""), /sessionKey|sessionId/i);
+  });
 });
