@@ -250,14 +250,26 @@ Markdown snapshots still write if `writeWorkspaceMemory: true`. With sync off, p
 
 ## How it fits OpenClaw
 
+With `ownsCompaction: true` (required), the **engine** must apply reduction — the host does not call built-in `appendCompaction` for this slot:
+
 ```text
-gateway decides to compact
-  → memory-compaction-redistill (provider / context engine) → LLM summary
-  → gateway writes type:"compaction" into session JSONL
-  → plugin after_compaction → snapshot ± LanceDB (± staging on degrade)
+gateway overflow/timeout/queued compact (often without params.messages)
+  → ContextEngine.compact
+      → load live sessionFile JSONL when messages absent
+      → LLM summarize (provider / staging multi-pass)
+      → tool-safe firstKeptEntryId + oc:jsonl:v1 ref in summary
+      → appendCompaction (active window = summary + fresh tail)
+      → optional successor rotate when file still > maxActiveTranscriptBytes
+  → host adoptCompactionTranscript if successor sessionId/sessionFile returned
+  → maintain() → { changed, bytesFreed, rewrittenEntries }
+  → after_compaction (filesystem sessionFile only) → snapshot ± LanceDB
 ```
 
+Fail-closed: empty/abort/apply error → `compacted: false`, **no** transcript mutation.
+
 `agents.defaults.compaction.memoryFlush` is an **OpenClaw core** pre-compact step (writes durable notes). It is separate from this plugin’s summarizer prompts.
+
+Recommend `agents.defaults.compaction.truncateAfterCompaction: true` for queued `/compact` host rotate when the host still honors it; overflow shrink relies on engine `appendCompaction` (+ engine rotate when the JSONL file remains oversized).
 
 ---
 
@@ -272,6 +284,9 @@ gateway decides to compact
 | `staging.enabled` crash on start | Set positive `staging.chunkMaxChars` |
 | LanceDB errors | Install/enable memory-lancedb-pro; set `memoryLancedbProPath`; or `syncToLancedb: false` |
 | Need newer code | `cd <workspace>/skills/memory-compaction-redistill && git pull --ff-only && npm install` then restart gateway (or managed `plugins update` if that install mode was used) |
+| Compact “succeeds” but tokens/bytes unchanged | Engine must apply (`appendCompaction`). Check submodule version has TASK-047 apply path; `npm test` includes `tests/transcript-apply.test.mjs`. Do not deploy stub `skills/` copy without apply. |
+| `maintain` TypeError on `.changed` | Engine must return `{ changed, bytesFreed, rewrittenEntries }` — fixed in TASK-047 |
+| `after_compaction` ENOENT on `agent:…` | Handler ignores non-filesystem `sessionFile` (sessionKey-shaped) |
 
 ---
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **TASK-047 Iteration A — context not shrinking:** `ContextEngine.compact` now **applies** after a successful non-empty LLM summarize: tool-safe `firstKeptEntryId`, opaque `oc:jsonl:v1:…` ref in summary, `appendCompaction` on live `sessionFile`. `compacted: true` only when apply succeeds. Overflow/timeout calls without `params.messages` load the transcript from `sessionFile`. Honors `abortSignal`. Fail-closed (empty/abort/apply error → no transcript mutation). When the JSONL file still exceeds `maxActiveTranscriptBytes`, engine rotates an OpenClaw-style successor (`parentSession`) and returns successor `sessionId`/`sessionFile` for host `adoptCompactionTranscript`.
+- `maintain()` always returns `{ changed, bytesFreed, rewrittenEntries }` (never `undefined`).
+- `acceptedHostParams` includes `runtimeContext` and `runtimeSettings`.
+- `after_compaction` opens only filesystem transcript paths (rejects sessionKey-shaped values → no ENOENT on `agent:…`).
+
+### Added
+
+- `lib/transcript-apply.js` — JSONL load/cut/append/rotate helpers (OpenClaw appendCompaction semantics; injectable in tests).
+- Offline suite `tests/transcript-apply.test.mjs` (happy apply, sessionFile-only, fail-closed, maintain shape, tool-pair, no auto-ingest refs, rotate).
+
 ### Changed
 
 - OpenClaw **2026.9.x** cold-start: manifest `kind` `utility` → `context-engine`; add `activation.onStartup` + `onConfigPaths` (`agents.defaults.compaction.provider`). Gateway only loads slot/activation owners — `plugins.load.paths` alone is not enough. Operators must set `plugins.slots.contextEngine=memory-compaction-redistill`.

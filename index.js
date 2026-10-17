@@ -23,6 +23,19 @@ import {
   readConsumedManifest,
   deleteStagingChunks,
 } from "./lib/staging.js";
+import {
+  appendCompactionToJsonl,
+  buildOcJsonlRef,
+  embedRefInSummary,
+  extractActiveMessages,
+  isFilesystemTranscriptPath,
+  loadTranscript,
+  parseByteSize,
+  rotateSuccessorTranscript,
+  selectToolSafeFirstKeptEntryId,
+  transcriptByteSize,
+  estimateEntryTokens,
+} from "./lib/transcript-apply.js";
 
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -286,57 +299,163 @@ function asRecord(value) {
  * @param {import("./lib/llm.js").LlmResolvedConfig} llmConfig
  * @param {(ctx?: { sessionKey?: string; agentId?: string; hintSessionFile?: string }) => Promise<string | null>} recoverPreviousSummary
  * @param {import("./lib/staging.js").StagingConfig} stagingConfig
+ * @param {{
+ *   summarize?: (params: object) => Promise<string>;
+ *   appendCompaction?: (params: object) => Promise<{ ok: true; entry: object; entryId: string }>;
+ *   rotateSuccessor?: (params: object) => Promise<{ sessionId: string; sessionFile: string }>;
+ *   loadTranscript?: (sessionFile: string) => Promise<{ entries: object[]; raw: string }>;
+ *   maxActiveTranscriptBytes?: number;
+ *   preferRotate?: boolean;
+ *   keepRecentTokens?: number;
+ * }} [deps] Injectable hooks for offline tests (no live gateway).
  */
-function createRedistillContextEngine(llmConfig, recoverPreviousSummary, stagingConfig) {
+export function createRedistillContextEngine(
+  llmConfig,
+  recoverPreviousSummary,
+  stagingConfig,
+  deps = {},
+) {
   const provider = createCompactionProvider(llmConfig, recoverPreviousSummary, stagingConfig);
+  const summarizeFn =
+    typeof deps.summarize === "function"
+      ? deps.summarize
+      : (params) => provider.summarize(params);
+  const appendCompactionFn =
+    typeof deps.appendCompaction === "function"
+      ? deps.appendCompaction
+      : appendCompactionToJsonl;
+  const rotateSuccessorFn =
+    typeof deps.rotateSuccessor === "function"
+      ? deps.rotateSuccessor
+      : rotateSuccessorTranscript;
+  const loadTranscriptFn =
+    typeof deps.loadTranscript === "function" ? deps.loadTranscript : loadTranscript;
 
   return {
     info: {
       id: "memory-compaction-redistill",
       name: "Memory Compaction Redistill Context Engine",
-      version: "1.0.0",
+      version: "1.1.0",
       ownsCompaction: true,
-      acceptedHostParams: ["agentId", "sessionId", "sessionKey", "sessionTarget", "tokenBudget", "currentTokenCount", "force", "customInstructions", "abortSignal", "workspaceDir"]
+      acceptedHostParams: [
+        "agentId",
+        "sessionId",
+        "sessionKey",
+        "sessionTarget",
+        "tokenBudget",
+        "currentTokenCount",
+        "force",
+        "customInstructions",
+        "abortSignal",
+        "workspaceDir",
+        "runtimeContext",
+        "runtimeSettings",
+      ],
     },
 
     /**
      * @param {object} params
-     * @param {unknown[]} params.messages
-     * @param {AbortSignal} [params.signal]
-     * @param {string} [params.customInstructions]
-     * @param {string} [params.previousSummary]
-     * @param {string} [params.sessionKey]
-     * @param {string} [params.agentId]
-     * @param {string} [params.sessionId]
-     * @param {object} [params.summarizationInstructions]
-     * @param {string} [params.summarizationInstructions.identifierPolicy]
-     * @param {string} [params.summarizationInstructions.identifierInstructions]
-     * @param {string} [params.latestUnresolvedUserRequest]
      */
     async compact(params) {
-      const { messages, signal, customInstructions, previousSummary, summarizationInstructions, latestUnresolvedUserRequest } = params;
+      const signal = params?.abortSignal ?? params?.signal;
+      const fail = (reason) => ({ ok: false, compacted: false, reason });
 
-      // Recover previousSummary if missing (transcript rotation) — session-scoped (C2)
+      if (signal?.aborted) {
+        return fail("aborted");
+      }
+
+      const sessionFileRaw = asNonEmptyString(params?.sessionFile);
+      const sessionFile = sessionFileRaw && isFilesystemTranscriptPath(sessionFileRaw)
+        ? sessionFileRaw.trim()
+        : "";
+
+      /** @type {object[]} */
+      let entries = [];
+      /** @type {unknown[]} */
+      let messages = Array.isArray(params?.messages) ? params.messages : [];
+
+      if (sessionFile) {
+        try {
+          const loaded = await loadTranscriptFn(sessionFile);
+          entries = loaded.entries;
+          const active = extractActiveMessages(entries);
+          if (!Array.isArray(params?.messages) || params.messages.length === 0) {
+            messages = active.messages;
+          }
+        } catch (err) {
+          llmConfig.log?.(
+            `memory-compaction-redistill: failed to read sessionFile: ${String(err)}`,
+          );
+          return fail(`session_file_read: ${String(err)}`);
+        }
+      } else if (messages.length === 0) {
+        return fail("missing_session_file_and_messages");
+      }
+
+      if (signal?.aborted) {
+        return fail("aborted");
+      }
+
+      const customInstructions = params?.customInstructions;
+      const previousSummary = params?.previousSummary;
+      const summarizationInstructions = params?.summarizationInstructions;
+      const latestUnresolvedUserRequest = params?.latestUnresolvedUserRequest;
+
       let prevSummary = previousSummary?.trim() ?? "";
       if (!prevSummary && typeof recoverPreviousSummary === "function") {
         try {
           const recovered = await recoverPreviousSummary({
             sessionKey: params.sessionKey,
             agentId: params.agentId,
+            hintSessionFile: sessionFile || undefined,
           });
           if (recovered?.trim()) {
             prevSummary = recovered.trim();
-            llmConfig.log?.(`memory-compaction-redistill: context engine T047 recovered previousSummary from parent session (${prevSummary.length} chars)`);
+            llmConfig.log?.(
+              `memory-compaction-redistill: context engine T047 recovered previousSummary from parent session (${prevSummary.length} chars)`,
+            );
           }
         } catch {
           /* recovery is best-effort */
         }
       }
 
-      const structuredInstructions = buildCompactionStructureInstructions(customInstructions, summarizationInstructions, latestUnresolvedUserRequest);
+      const structuredInstructions = buildCompactionStructureInstructions(
+        customInstructions,
+        summarizationInstructions,
+        latestUnresolvedUserRequest,
+      );
 
+      const runtimeSettings = asRecord(params?.runtimeSettings);
+      const keepRecentTokens =
+        (typeof deps.keepRecentTokens === "number" && deps.keepRecentTokens > 0
+          ? deps.keepRecentTokens
+          : undefined) ??
+        (typeof runtimeSettings.keepRecentTokens === "number"
+          ? runtimeSettings.keepRecentTokens
+          : 20_000);
+
+      const firstKeptEntryId =
+        entries.length > 0
+          ? selectToolSafeFirstKeptEntryId(entries, {
+              keepRecentTokens,
+              estimateTokens: estimateEntryTokens,
+            })
+          : null;
+
+      if (sessionFile && !firstKeptEntryId) {
+        return fail("no_first_kept_entry");
+      }
+
+      const tokensBefore =
+        typeof params?.currentTokenCount === "number" && params.currentTokenCount > 0
+          ? params.currentTokenCount
+          : estimateMessagesTokens(messages);
+
+      /** @type {string} */
+      let summaryText;
       try {
-        const result = await provider.summarize({
+        const result = await summarizeFn({
           messages,
           signal,
           customInstructions: structuredInstructions,
@@ -346,25 +465,146 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary, staging
           agentId: params.agentId,
           workspaceDir: params.workspaceDir,
         });
-
-        if (typeof result === "string" && result.trim()) {
-          return {
-            ok: true,
-            compacted: true,
-            reason: "redistill",
-            result: {
-              summary: result,
-              // The gateway will fill in tokensBefore/After from the preparation
-            }
-          };
+        if (typeof result !== "string" || !result.trim()) {
+          llmConfig.log?.(
+            "memory-compaction-redistill: context engine provider returned empty result",
+          );
+          return fail("empty_result");
         }
-        llmConfig.log?.("memory-compaction-redistill: context engine provider returned empty result");
-        return { ok: false, compacted: false, reason: "empty_result" };
+        summaryText = result.trim();
       } catch (err) {
-        if (signal?.aborted) throw err;
-        llmConfig.log?.(`memory-compaction-redistill: context engine compact failed: ${String(err)}`);
-        return { ok: false, compacted: false, reason: `error: ${String(err)}` };
+        if (signal?.aborted) {
+          return fail("aborted");
+        }
+        llmConfig.log?.(
+          `memory-compaction-redistill: context engine compact failed: ${String(err)}`,
+        );
+        return fail(`error: ${String(err)}`);
       }
+
+      if (signal?.aborted) {
+        return fail("aborted");
+      }
+
+      // Without a live sessionFile we cannot apply — never lie with compacted:true.
+      if (!sessionFile || !firstKeptEntryId) {
+        return fail("apply_requires_session_file");
+      }
+
+      const agentId = asNonEmptyString(params?.agentId) ?? "main";
+      const sessionId =
+        asNonEmptyString(params?.sessionId) ??
+        (typeof entries.find((e) => e?.type === "session")?.id === "string"
+          ? /** @type {string} */ (entries.find((e) => e?.type === "session")?.id)
+          : "unknown");
+
+      const messageEntries = extractActiveMessages(entries).messageEntries;
+      const firstKeptIndex = entries.findIndex((e) => e.id === firstKeptEntryId);
+      const summarizedEntries = messageEntries.filter((e) => {
+        const idx = entries.findIndex((x) => x.id === e.id);
+        return idx >= 0 && idx < firstKeptIndex;
+      });
+      const fromEntryId = summarizedEntries[0]?.id ?? messageEntries[0]?.id ?? firstKeptEntryId;
+      const toEntryId =
+        summarizedEntries.at(-1)?.id ??
+        (firstKeptIndex > 0 ? entries[firstKeptIndex - 1]?.id : fromEntryId) ??
+        fromEntryId;
+
+      const ref = buildOcJsonlRef({
+        agentId,
+        sessionId,
+        sessionFile,
+        fromEntryId: String(fromEntryId),
+        toEntryId: String(toEntryId),
+      });
+      const summaryWithRef = embedRefInSummary(summaryText, ref);
+
+      const keptMessages = messageEntries
+        .filter((e) => {
+          const idx = entries.findIndex((x) => x.id === e.id);
+          return idx >= firstKeptIndex;
+        })
+        .map((e) => e.message);
+      const tokensAfter = Math.max(
+        1,
+        estimateMessagesTokens([{ role: "user", content: summaryWithRef }, ...keptMessages]),
+      );
+
+      /** @type {object} */
+      let compactionEntry;
+      try {
+        const applied = await appendCompactionFn({
+          sessionFile,
+          summary: summaryWithRef,
+          firstKeptEntryId,
+          tokensBefore,
+          tokensAfter,
+          details: { provider: "memory-compaction-redistill", ref },
+        });
+        compactionEntry = applied.entry;
+      } catch (err) {
+        llmConfig.log?.(
+          `memory-compaction-redistill: appendCompaction failed (fail-closed): ${String(err)}`,
+        );
+        return fail(`apply_failed: ${String(err)}`);
+      }
+
+      /** @type {{ sessionId?: string; sessionFile?: string }} */
+      const successor = {};
+      let resultSummary = summaryWithRef;
+      let resultRef = ref;
+      const maxBytes =
+        deps.maxActiveTranscriptBytes ??
+        parseByteSize(runtimeSettings.maxActiveTranscriptBytes) ??
+        parseByteSize("1.5mb");
+      const preferRotate = deps.preferRotate === true;
+      try {
+        const bytes = await transcriptByteSize(sessionFile);
+        const shouldRotate = preferRotate || (typeof maxBytes === "number" && bytes > maxBytes);
+        if (shouldRotate) {
+          resultRef = buildOcJsonlRef({
+            agentId,
+            sessionId,
+            sessionFile,
+            fromEntryId: String(fromEntryId),
+            toEntryId: String(toEntryId),
+            parentSessionFile: sessionFile,
+          });
+          resultSummary = embedRefInSummary(summaryText, resultRef);
+          compactionEntry = { ...compactionEntry, summary: resultSummary };
+          const rotated = await rotateSuccessorFn({
+            sessionFile,
+            agentId,
+            compactionEntry,
+            firstKeptEntryId,
+          });
+          successor.sessionId = rotated.sessionId;
+          successor.sessionFile = rotated.sessionFile;
+          llmConfig.log?.(
+            `memory-compaction-redistill: rotated successor sessionFile=${rotated.sessionFile}`,
+          );
+        }
+      } catch (err) {
+        // Compaction boundary already applied — still success for active-window shrink.
+        llmConfig.log?.(
+          `memory-compaction-redistill: successor rotate skipped/failed (boundary kept): ${String(err)}`,
+        );
+      }
+
+      return {
+        ok: true,
+        compacted: true,
+        reason: "redistill",
+        result: {
+          summary: resultSummary,
+          firstKeptEntryId,
+          tokensBefore,
+          tokensAfter,
+          details: { ref: resultRef, provider: "memory-compaction-redistill" },
+          ...(successor.sessionId ? { sessionId: successor.sessionId } : {}),
+          ...(successor.sessionFile ? { sessionFile: successor.sessionFile } : {}),
+        },
+      };
     },
 
     // ContextEngine required methods — assemble must not under-report tokens (C3)
@@ -380,7 +620,9 @@ function createRedistillContextEngine(llmConfig, recoverPreviousSummary, staging
     },
     async afterTurn() {},
     async ingestBatch() {},
-    async maintain() {},
+    async maintain() {
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+    },
   };
 }
 
@@ -451,11 +693,15 @@ export default function register(api) {
   // This bypasses the broken getCompactionProvider lookup (registry state duplicated across chunks)
 
   api.on("after_compaction", async (event, ctx) => {
-    const sessionFile = asNonEmptyString(event.sessionFile);
-    if (!sessionFile) {
-      api.logger.debug?.("memory-compaction-redistill: after_compaction without sessionFile, skip");
+    const sessionFileRaw = asNonEmptyString(event.sessionFile);
+    // Host must pass a filesystem path; never open sessionKey-shaped values (ENOENT).
+    if (!sessionFileRaw || !isFilesystemTranscriptPath(sessionFileRaw)) {
+      api.logger.debug?.(
+        "memory-compaction-redistill: after_compaction without filesystem sessionFile, skip",
+      );
       return;
     }
+    const sessionFile = sessionFileRaw.trim();
 
     const compaction = await readLatestCompaction(sessionFile);
     if (!compaction?.summary) {
