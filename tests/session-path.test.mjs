@@ -194,4 +194,53 @@ describe("session-path resolve", () => {
     assert.equal(resolved.sessionFile, "");
     assert.match(String(resolved.detail ?? ""), /sessionKey|sessionId/i);
   });
+
+  it("resolves sessionId.jsonl even when sessions.json is unreadable/corrupt", async () => {
+    // Live: index may be unreadable or non-JSON; host still sends real sessionId
+    const mainDir = join(home, ".openclaw", "agents", "main", "sessions");
+    await mkdir(mainDir, { recursive: true });
+    const sid = "24b4a68f-5d59-42fd-a54f-bc6256bb7a8d";
+    const mainJsonl = join(mainDir, `${sid}.jsonl`);
+    await writeFile(
+      mainJsonl,
+      `${JSON.stringify({ type: "session", version: 2, id: sid, timestamp: "2026-10-17T00:00:00.000Z", cwd: "/tmp" })}\n` +
+        `${JSON.stringify({ type: "message", id: randomUUID(), message: { role: "user", content: "x" } })}\n`,
+      "utf8",
+    );
+    await writeFile(join(mainDir, "sessions.json"), "{ not valid json\n", "utf8");
+
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:86a91739-3efb-4a8f-bafc-6d4e85bc3976",
+        sessionId: sid,
+        sessionTarget: {
+          storePath: join(mainDir, "sessions.json"),
+          sessionId: sid,
+          agentId: "main",
+        },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, mainJsonl);
+  });
+
+  it("error detail lists tried sessionId.jsonl path when missing", async () => {
+    const mainDir = join(home, ".openclaw", "agents", "main", "sessions");
+    await mkdir(mainDir, { recursive: true });
+    await writeFile(join(mainDir, "sessions.json"), "{}\n", "utf8");
+    const sid = "24b4a68f-5d59-42fd-a54f-bc6256bb7a8d";
+    const resolved = await resolveFilesystemSessionFile(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:86a91739-3efb-4a8f-bafc-6d4e85bc3976",
+        sessionId: sid,
+        sessionTarget: { storePath: join(mainDir, "sessions.json"), sessionId: sid },
+      },
+      { homeDir: home },
+    );
+    assert.equal(resolved.sessionFile, "");
+    assert.match(String(resolved.detail ?? ""), /24b4a68f-5d59-42fd-a54f-bc6256bb7a8d\.jsonl/);
+    assert.match(String(resolved.detail ?? ""), /missing|not found|exists=false/i);
+  });
 });
