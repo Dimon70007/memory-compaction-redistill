@@ -1,5 +1,7 @@
 /**
- * Resolve sessionKey-shaped host sessionFile → JSONL path.
+ * Legacy JSONL path helper tests (NOT production compact SoT on OpenClaw 2026.9.9).
+ * Compact load/apply uses SessionManager / sessionTarget; these helpers remain only
+ * for abs `.jsonl` legacy sessions.
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";

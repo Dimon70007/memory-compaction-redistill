@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **TASK-047 A.I4 — OpenClaw 2026.9.9 SQLite-era compact I/O:** primary load/apply via `SessionManager` (`openclaw/plugin-sdk/agent-sessions`) using typed `sessionTarget` / sessionKey / `sqlite:` markers. **No** sessionKey→`sessions/<id>.jsonl` as production path. JSONL apply/rotate only when host passes a real abs `.jsonl`. Opaque refs: `oc:sqlite:v1:…` (sqlite) / `oc:jsonl:v1:…` (legacy). Fail closed with `missing_session_target` / `session_manager_unavailable` when sqlite apply API unavailable. Declares `transcriptSemantics` fencing + `commitTurn`. `after_compaction` skips `sqlite:` markers too. Tests: fake SessionManager harness; demoted JSONL path helper to legacy-only.
+
+### Added
+
+- **A.I4 test coverage:** `tests/session-access.test.mjs` (classify/marker/target/refs), `tests/session-manager-bridge.test.mjs` (`resolveTranscriptStore` / open sqlite|jsonl / fail-closed), `tests/sqlite-compact.test.mjs` (openSessionManager path, runtimeContext target, sqlite marker, apply fail, empty branch, abort, tool-pair + no rotate, second compact after new turns).
+
 ### Fixed
 
-- **Session path resolution aligned with OpenClaw host:** port of `resolveSessionFilePath` / `resolveSessionTranscriptCandidates` — `storePath` → sessions dir, exact `sessions.json[sessionKey]` → `entry.sessionId` / `entry.sessionFile`, else `<sessionsDir>/<sessionId>.jsonl`; no full-index UUID scan. Unresolved errors still include `tried=…(exists=false)`.
+- **Session path resolution aligned with OpenClaw host:** port of `resolveSessionFilePath` / `resolveSessionTranscriptCandidates` — `storePath` → sessions dir, exact `sessions.json[sessionKey]` → `entry.sessionId` / `entry.sessionFile`, else `<sessionsDir>/<sessionId>.jsonl`; no full-index UUID scan. Unresolved errors still include `tried=…(exists=false)`. *(Legacy helper only after A.I4 — not compact primary.)*
 - **`missing_session_file` with `sessionKey` + `sessionId` but no `.jsonl`:** try `<sessionsDir>/<sessionId>.jsonl` even when `sessions.json` is unreadable/corrupt.
 - **`missing_session_file… storeHints=…/sessions.json`:** resolve via exact sessionKey entry or sessionId path under the store dir; clearer error when both ids missing.
 - **`corrupt_jsonl_line` on `sessions.json`:** `sessionTarget.storePath` is the sessions **store** (`…/sessions` or `…/sessions.json`), not a transcript — never load it as JSONL; use it only to locate `<sessionId>.jsonl` via the index.

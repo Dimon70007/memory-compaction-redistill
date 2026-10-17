@@ -255,17 +255,18 @@ With `ownsCompaction: true` (required), the **engine** must apply reduction — 
 ```text
 gateway overflow/timeout/queued compact (often without params.messages)
   → ContextEngine.compact
-      → load live sessionFile JSONL when messages absent
+      → OpenClaw 2026.9.9: open SessionManager via sessionTarget
+         (sessionFile may be sessionKey or sqlite: marker — not a .jsonl path)
       → LLM summarize (provider / staging multi-pass)
-      → tool-safe firstKeptEntryId + oc:jsonl:v1 ref in summary
-      → appendCompaction (active window = summary + fresh tail)
-      → optional successor rotate when file still > maxActiveTranscriptBytes
-  → host adoptCompactionTranscript if successor sessionId/sessionFile returned
+      → tool-safe firstKeptEntryId + oc:sqlite:v1 (or oc:jsonl:v1 for legacy .jsonl)
+      → SessionManager.appendCompaction (same-session identity on sqlite)
+      → JSONL-only: optional successor rotate when file still oversized
+  → host adoptCompactionTranscript only if successor sessionTarget returned
   → maintain() → { changed, bytesFreed, rewrittenEntries }
-  → after_compaction (filesystem sessionFile only) → snapshot ± LanceDB
+  → after_compaction (real filesystem .jsonl only; skip sessionKey / sqlite:)
 ```
 
-Fail-closed: empty/abort/apply error → `compacted: false`, **no** transcript mutation.
+Fail-closed: empty/abort/apply/missing SessionManager target → `compacted: false`, **no** transcript mutation.
 
 **CompactResult (OpenClaw contract):** success returns `tokensBefore` / `tokensAfter` / `firstKeptEntryId` / `summary`; shrink for UI = `tokensBefore − tokensAfter` (also `details.tokensSaved`). On successor rotate: typed `result.sessionTarget` (`agentId`, `sessionId`, `sessionKey?`, `storePath`) plus legacy `sessionId` / `sessionFile` for older adopt paths.
 
@@ -286,9 +287,10 @@ Fail-closed: empty/abort/apply error → `compacted: false`, **no** transcript m
 | `staging.enabled` crash on start | Set positive `staging.chunkMaxChars` |
 | LanceDB errors | Install/enable memory-lancedb-pro; set `memoryLancedbProPath`; or `syncToLancedb: false` |
 | Need newer code | `cd <workspace>/skills/memory-compaction-redistill && git pull --ff-only && npm install` then restart gateway (or managed `plugins update` if that install mode was used) |
-| Compact “succeeds” but tokens/bytes unchanged | Engine must apply (`appendCompaction`). Check submodule version has TASK-047 apply path; `npm test` includes `tests/transcript-apply.test.mjs`. Do not deploy stub `skills/` copy without apply. |
+| Compact “succeeds” but tokens/bytes unchanged | Engine must apply via SessionManager `appendCompaction` (A.I4). Check submodule has sqlite path; `npm test` covers fake SessionManager + JSONL legacy. Do not deploy stub `skills/` copy without apply. |
+| `missing_session_target` / `session_manager_unavailable` | Host must pass resolvable `sessionTarget` (agentId, sessionId, sessionKey, storePath). Plugin no longer invents `sessions/<id>.jsonl` from sessionKey. |
 | `maintain` TypeError on `.changed` | Engine must return `{ changed, bytesFreed, rewrittenEntries }` — fixed in TASK-047 |
-| `after_compaction` ENOENT on `agent:…` | Handler ignores non-filesystem `sessionFile` (sessionKey-shaped) |
+| `after_compaction` ENOENT on `agent:…` or `sqlite:…` | Handler ignores non-filesystem locators (sessionKey / sqlite markers) |
 
 ---
 
@@ -307,7 +309,10 @@ Offline suite includes:
 |---|---|
 | `tests/transcript-apply.test.mjs` | append/rotate + engine apply / fail-closed |
 | `tests/corners.test.mjs` | corrupt JSONL, header-only, second compact, tool-pair, sessionKey hook skip, summarize throw |
-| `tests/openclaw-mock/lifecycle.test.mjs` | mock host lifecycle: window shrink on success, byte-identical on fail, rotate `parentSession` |
+| `tests/session-access.test.mjs` | sessionKey / `sqlite:` classify, target resolve, `oc:sqlite` refs |
+| `tests/session-manager-bridge.test.mjs` | `resolveTranscriptStore`, SessionManager inject, no jsonl invent, unavailable fail-closed |
+| `tests/sqlite-compact.test.mjs` | sqlite compact corners: openSessionManager, marker, apply fail, abort, pairing, no rotate |
+| `tests/openclaw-mock/lifecycle.test.mjs` | mock host lifecycle: window shrink on success, byte-identical on fail, rotate `parentSession`, sqlite SM |
 
 Mock harness lives under `tests/openclaw-mock/` (see `ATTRIBUTION.md`). Fixtures are synthetic JSONL in `tests/fixtures/` — tests copy into `os.tmpdir()` only. **No** live gateway, litellm, OpenRouter, or `/home/clawbox` I/O.
 

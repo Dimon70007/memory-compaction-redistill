@@ -16,6 +16,7 @@ import {
 } from "../../lib/after-compaction.js";
 import { projectActiveWindow } from "./active-window.js";
 import { runOwnsCompactionLifecycle } from "./host.js";
+import { createFakeSqliteStoreDeps } from "./fake-session-manager.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 
@@ -207,10 +208,47 @@ describe("after_compaction path guard (mock)", () => {
     );
   });
 
+  it("sqlite: marker sessionFile skips without throw", () => {
+    assert.equal(
+      shouldSkipAfterCompactionSessionFile(
+        "sqlite:main:94b9984a-321b-4b6c-9d96-4345f1fb3e62:/tmp/sessions/sessions.json",
+      ),
+      true,
+    );
+  });
+
   it("filesystem path is not skipped", () => {
     assert.equal(
       shouldSkipAfterCompactionSessionFile(join(tmpdir(), "x.jsonl")),
       false,
     );
+  });
+});
+
+describe("openclaw-mock sqlite SessionManager lifecycle", () => {
+  it("overflow-shaped compact (no messages) applies via fake SessionManager", async () => {
+    const raw = await readFile(join(FIXTURES, "synthetic-overflow.jsonl"), "utf8");
+    const entries = parseTranscriptLines(raw);
+    const before = projectActiveWindow(entries);
+    const fake = createFakeSqliteStoreDeps(entries, {
+      sessionId: "synth-overflow-001",
+      sessionKey: "agent:main:dashboard:mock",
+      storePath: "/tmp/fake/sessions.json",
+    });
+    const engine = makeEngine({ openTranscriptStore: fake.openTranscriptStore });
+    const result = await engine.compact({
+      sessionId: fake.target.sessionId,
+      sessionKey: fake.target.sessionKey,
+      agentId: "main",
+      sessionFile: fake.target.sessionKey,
+      sessionTarget: fake.target,
+      currentTokenCount: 8000,
+      runtimeContext: { transcriptStorage: { kind: "sqlite" } },
+    });
+    assert.equal(result.compacted, true, `reason=${result.reason}`);
+    assert.match(String(result.result?.summary ?? ""), /oc:sqlite:v1:/);
+    const after = projectActiveWindow(fake.manager.entries);
+    assert.ok(after.estimatedTokens < before.estimatedTokens);
+    assert.ok(fake.manager.entries.some((e) => e.type === "compaction"));
   });
 });

@@ -9,8 +9,9 @@
 | ownsCompaction compact | Host calls `ContextEngine.compact` then `maintain` then `after_compaction` | `runOwnsCompactionLifecycle` |
 | Active window after compaction | Model-visible = summary + messages from `firstKeptEntryId` | `projectActiveWindow(entries)` |
 | Tool-safe cut | Do not orphan `toolResult` without its `toolCall` | Uses plugin `selectToolSafeFirstKeptEntryId` (engine) |
-| Successor rotate | New `.jsonl` with `parentSession` = predecessor abs path | Asserted via engine rotate + lifecycle return |
-| `after_compaction` sessionFile | Filesystem path only | Handler / skip guard; sessionKey-shaped rejected |
+| Sqlite SessionManager | `SessionManager.openAsync` + `appendCompaction` | `fake-session-manager.js` + sqlite lifecycle test |
+| Successor rotate | New `.jsonl` with `parentSession` (legacy JSONL only) | Asserted via engine rotate + lifecycle return |
+| `after_compaction` sessionFile | Filesystem `.jsonl` only | Skip sessionKey / `sqlite:` markers |
 
 ## Non-goals
 

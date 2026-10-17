@@ -20,6 +20,13 @@ import {
 } from "../lib/transcript-apply.js";
 import { createRedistillContextEngine } from "../index.js";
 import { estimateMessagesTokens } from "../lib/session-recovery.js";
+import { createFakeSqliteStoreDeps } from "./openclaw-mock/fake-session-manager.js";
+import {
+  classifySessionFile,
+  isNonFilesystemSessionLocator,
+  parseSqliteSessionFileMarker,
+} from "../lib/session-access.js";
+import { shouldSkipAfterCompactionSessionFile } from "../lib/after-compaction.js";
 
 /**
  * @param {object[]} entries
@@ -305,6 +312,44 @@ describe("createRedistillContextEngine compact apply", () => {
     assert.ok(engine.info.acceptedHostParams.includes("runtimeContext"));
     assert.ok(engine.info.acceptedHostParams.includes("runtimeSettings"));
     assert.equal(engine.info.ownsCompaction, true);
+    assert.equal(
+      engine.info.transcriptSemantics?.currentTurnFence,
+      "before-current-turn-entry-v1",
+    );
+  });
+
+  it("commitTurn is idempotent on advancementKey", async () => {
+    const engine = makeEngine();
+    const first = await engine.commitTurn({ advancementKey: "turn-1" });
+    const second = await engine.commitTurn({ advancementKey: "turn-1" });
+    assert.equal(first.status, "committed");
+    assert.equal(second.status, "duplicate");
+  });
+
+  it("session-access: sessionKey and sqlite markers are non-filesystem", () => {
+    assert.equal(classifySessionFile("agent:main:dashboard:x"), "session-key");
+    assert.equal(
+      classifySessionFile(
+        "sqlite:main:94b9984a-321b-4b6c-9d96-4345f1fb3e62:/tmp/sessions/sessions.json",
+      ),
+      "sqlite-marker",
+    );
+    assert.ok(
+      parseSqliteSessionFileMarker(
+        "sqlite:main:94b9984a-321b-4b6c-9d96-4345f1fb3e62:/tmp/sessions/sessions.json",
+      ),
+    );
+    assert.equal(
+      shouldSkipAfterCompactionSessionFile("agent:main:dashboard:x"),
+      true,
+    );
+    assert.equal(
+      shouldSkipAfterCompactionSessionFile(
+        "sqlite:main:94b9984a-321b-4b6c-9d96-4345f1fb3e62:/tmp/sessions/sessions.json",
+      ),
+      true,
+    );
+    assert.equal(isNonFilesystemSessionLocator(sessionFile), false);
   });
 
   it("maintain always returns changed/bytesFreed/rewrittenEntries", async () => {
@@ -466,79 +511,47 @@ describe("createRedistillContextEngine compact apply", () => {
     assert.ok(sizeBefore > 1024);
   });
 
-  it("storePath=sessions.json must not be loaded as transcript (live corrupt_jsonl bug)", async () => {
-    const home = await mkdtemp(join(tmpdir(), "mcr-storepath-"));
-    try {
-      const agentId = "main";
-      const sessionKey = "agent:main:dashboard:test";
-      const sessionsDir = join(home, ".openclaw", "agents", agentId, "sessions");
-      const { mkdir } = await import("node:fs/promises");
-      await mkdir(sessionsDir, { recursive: true });
-      const sid = sessionId;
-      const dest = join(sessionsDir, `${sid}.jsonl`);
-      await writeFile(dest, await readFile(sessionFile, "utf8"), "utf8");
-      const indexPath = join(sessionsDir, "sessions.json");
-      // Pretty-printed index — line 1 is "{" which triggers corrupt_jsonl_line:1 if misread as JSONL
-      await writeFile(
-        indexPath,
-        `{\n  ${JSON.stringify(sessionKey)}: { "sessionId": ${JSON.stringify(sid)} }\n}\n`,
-        "utf8",
-      );
-
-      const engine = makeEngine({ homeDir: home, keepRecentTokens: 40 });
-      const result = await engine.compact({
-        sessionId: sid,
-        sessionKey,
-        agentId,
-        sessionFile: sessionKey,
-        sessionTarget: { storePath: indexPath, sessionId: sid, agentId },
-        currentTokenCount: 5000,
-      });
-      assert.equal(result.compacted, true, `reason=${result.reason}`);
-      assert.ok(!String(result.reason ?? "").includes("corrupt_jsonl"));
-      const after = parseTranscriptLines(await readFile(dest, "utf8"));
-      assert.ok(after.some((e) => e.type === "compaction"));
-      // Index must remain untouched
-      assert.ok((await readFile(indexPath, "utf8")).includes("sessionId"));
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  it("sqlite-era: sessionKey sessionFile + SessionManager applies (no JSONL)", async () => {
+    const entries = buildFixtureEntries(sessionId);
+    const fake = createFakeSqliteStoreDeps(entries, {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:dashboard:86a91739-3efb-4a8f-bafc-6d4e85bc3976",
+      storePath: "/tmp/fake-agent/sessions/sessions.json",
+    });
+    const engine = makeEngine({
+      keepRecentTokens: 40,
+      openTranscriptStore: fake.openTranscriptStore,
+    });
+    const result = await engine.compact({
+      sessionId,
+      sessionKey: fake.target.sessionKey,
+      agentId: "main",
+      sessionFile: fake.target.sessionKey,
+      sessionTarget: fake.target,
+      currentTokenCount: 5000,
+      runtimeContext: { transcriptStorage: { kind: "sqlite" } },
+    });
+    assert.equal(result.compacted, true, `reason=${result.reason}`);
+    assert.match(String(result.result?.summary ?? ""), /oc:sqlite:v1:/);
+    assert.equal(result.result?.details?.storeKind, "sqlite");
+    assert.ok(fake.manager.entries.some((e) => e.type === "compaction"));
+    // Same-session: no successor rotate on sqlite
+    assert.equal(result.result?.sessionTarget, undefined);
   });
 
-  it("sessionKey-shaped sessionFile resolves via sessions.json and applies", async () => {
-    const home = await mkdtemp(join(tmpdir(), "mcr-skresolve-"));
-    try {
-      const agentId = "team-lead";
-      const sessionKey = "agent:team-lead:telegram:group:-1003808706444:topic:2";
-      const sessionsDir = join(home, ".openclaw", "agents", agentId, "sessions");
-      const { mkdir } = await import("node:fs/promises");
-      await mkdir(sessionsDir, { recursive: true });
-      // Move fixture into agent sessions dir
-      const sid = sessionId;
-      const dest = join(sessionsDir, `${sid}.jsonl`);
-      await writeFile(dest, await readFile(sessionFile, "utf8"), "utf8");
-      await writeFile(
-        join(sessionsDir, "sessions.json"),
-        JSON.stringify({ [sessionKey]: { sessionId: sid } }),
-        "utf8",
-      );
-
-      const engine = makeEngine({ homeDir: home, keepRecentTokens: 40 });
-      const result = await engine.compact({
-        sessionId: sid,
-        sessionKey,
-        agentId,
-        // Host bug/shape: sessionFile is the sessionKey
-        sessionFile: sessionKey,
-        currentTokenCount: 5000,
-      });
-      assert.equal(result.compacted, true);
-      assert.ok(result.result?.firstKeptEntryId);
-      const after = parseTranscriptLines(await readFile(dest, "utf8"));
-      assert.ok(after.some((e) => e.type === "compaction"));
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  it("sqlite-era: fail closed without SessionManager (no sessionKey→jsonl fallback)", async () => {
+    const engine = makeEngine({ keepRecentTokens: 40 });
+    const result = await engine.compact({
+      sessionId,
+      sessionKey: "agent:main:dashboard:test",
+      agentId: "main",
+      sessionFile: "agent:main:dashboard:test",
+      currentTokenCount: 5000,
+    });
+    assert.equal(result.compacted, false);
+    assert.match(String(result.reason ?? ""), /missing_session_target|session_manager/);
+    assert.ok(!String(result.reason ?? "").includes("sessions/"));
   });
 
   it("happy path CompactResult includes size fields without sessionTarget when not rotated", async () => {
