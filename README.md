@@ -271,7 +271,7 @@ Fail-closed: empty/abort/apply error → `compacted: false`, **no** transcript m
 
 `agents.defaults.compaction.memoryFlush` is an **OpenClaw core** pre-compact step (writes durable notes). It is separate from this plugin’s summarizer prompts.
 
-Recommend `agents.defaults.compaction.truncateAfterCompaction: true` for queued `/compact` host rotate when the host still honors it; overflow shrink relies on engine `appendCompaction` (+ engine rotate when the JSONL file remains oversized).
+**Do not** set `agents.defaults.compaction.truncateAfterCompaction` on OpenClaw **2026.9.9** — `openclaw config validate` rejects it (`Unrecognized key`). Overflow/file shrink is engine-owned: `appendCompaction` + optional successor rotate returning `sessionTarget` / `sessionFile`.
 
 ---
 
